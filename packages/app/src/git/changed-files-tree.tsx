@@ -6,9 +6,8 @@ import { FlatList } from "@/components/ui/scroll-view";
 import type { WorkingDiffMode } from "@/git/diff-document";
 import { DiffFolderRow } from "@/git/diff-folder-row";
 import {
-  buildDiffTree,
+  buildFlatDirectoryDiffTree,
   collectDirPaths,
-  compressSingleChildChains,
   flattenDiffTree,
   type DiffTreeRow,
 } from "@/git/diff-tree";
@@ -21,6 +20,9 @@ export interface ChangedFilesTreeProps {
   onSelectFile: (path: string) => void;
   collapsedFolderPaths: string[];
   onCollapsedFolderPathsChange: (paths: string[]) => void;
+  checkedPaths?: Set<string>;
+  onToggleFileCheck?: (path: string) => void;
+  onToggleFolderCheck?: (dirPath: string) => void;
 }
 
 /** The changed-files tree shared by the desktop Changes rail and the compact Jump to file sheet. */
@@ -30,14 +32,17 @@ export function ChangedFilesTree({
   onSelectFile,
   collapsedFolderPaths,
   onCollapsedFolderPathsChange,
+  checkedPaths,
+  onToggleFileCheck,
+  onToggleFolderCheck,
 }: ChangedFilesTreeProps) {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const compressedTree = useMemo(() => compressSingleChildChains(buildDiffTree(files)), [files]);
-  const allFolderPaths = useMemo(() => collectDirPaths(compressedTree), [compressedTree]);
+  const flatDirTree = useMemo(() => buildFlatDirectoryDiffTree(files), [files]);
+  const allFolderPaths = useMemo(() => collectDirPaths(flatDirTree), [flatDirTree]);
   const collapsedFolders = useMemo(() => new Set(collapsedFolderPaths), [collapsedFolderPaths]);
   const items = useMemo(
-    () => flattenDiffTree(compressedTree, collapsedFolders),
-    [collapsedFolders, compressedTree],
+    () => flattenDiffTree(flatDirTree, collapsedFolders),
+    [collapsedFolders, flatDirTree],
   );
   const handleSelectPath = useCallback((path: string) => setSelectedPath(path), []);
   const handleSelectFile = useCallback(
@@ -73,6 +78,24 @@ export function ChangedFilesTree({
   const renderItem = useCallback(
     ({ item }: { item: DiffTreeRow }) => {
       if (item.kind === "folder") {
+        let checkState: "checked" | "unchecked" | "indeterminate" | undefined;
+        if (checkedPaths && onToggleFolderCheck) {
+          const directFolderFiles = files.filter(
+            (f) => f.path.split("/").slice(0, -1).join("/") === item.dirPath,
+          );
+          const folderFiles =
+            directFolderFiles.length > 0
+              ? directFolderFiles
+              : files.filter((f) => f.path.startsWith(`${item.dirPath}/`));
+          const checkedCount = folderFiles.filter((f) => checkedPaths.has(f.path)).length;
+          if (checkedCount === 0) {
+            checkState = "unchecked";
+          } else if (checkedCount === folderFiles.length) {
+            checkState = "checked";
+          } else {
+            checkState = "indeterminate";
+          }
+        }
         return (
           <DiffFolderRow
             dirPath={item.dirPath}
@@ -82,6 +105,9 @@ export function ChangedFilesTree({
             isSelected={selectedPath === item.dirPath}
             additions={item.additions}
             deletions={item.deletions}
+            fileCount={item.fileCount}
+            checkState={checkState}
+            onToggleCheck={onToggleFolderCheck}
             onToggle={handleToggleFolder}
             onCollapse={handleCollapseFolder}
             onSelect={handleSelectPath}
@@ -104,6 +130,8 @@ export function ChangedFilesTree({
           isSelected={selectedPath === item.file.path}
           depth={item.depth}
           showDir={false}
+          checked={checkedPaths ? checkedPaths.has(item.file.path) : undefined}
+          onToggleCheck={onToggleFileCheck}
           onActivate={handleSelectFile}
           onSelect={handleSelectPath}
           onOpenFile={mode.onOpenFile}
@@ -115,18 +143,24 @@ export function ChangedFilesTree({
           revealTargetName={mode.revealTargetName}
           onDownload={mode.onDownload}
           onDuplicate={mode.onDuplicate}
+          onStage={mode.onStage}
+          onUnstage={mode.onUnstage}
           onRevert={mode.onRevert}
           testID={`diff-tree-file-${item.fileIndex}`}
         />
       );
     },
     [
+      checkedPaths,
+      collapsedFolders,
+      files,
       handleCollapseFolder,
       handleSelectFile,
       handleSelectPath,
       handleToggleFolder,
-      collapsedFolders,
       mode,
+      onToggleFileCheck,
+      onToggleFolderCheck,
       selectedPath,
     ],
   );

@@ -22,6 +22,7 @@ import { assertSafeGitRef as assertWorktreeSafeGitRef } from "../../worktree-ses
  */
 export interface GitMutationService {
   checkoutExistingBranch(cwd: string, branch: string): Promise<CheckoutExistingBranchResult>;
+  checkoutNewBranch(cwd: string, newBranchName: string): Promise<CheckoutExistingBranchResult>;
   createBranchFromBase(params: {
     cwd: string;
     baseBranch: string;
@@ -101,6 +102,20 @@ export function createGitMutationService(deps: {
       const result = await checkoutResolvedBranch({ cwd, resolution });
       await notifyGitMutation(cwd, "switch-branch", { invalidateForge: true });
       return result;
+    },
+
+    async checkoutNewBranch(cwd, newBranchName) {
+      assertSafeGitRef(newBranchName, "new branch");
+      const exists = await workspaceGitService.hasLocalBranch(cwd, newBranchName);
+      if (exists) {
+        throw new Error(`Branch already exists: ${newBranchName}`);
+      }
+      await runGitCommand(["checkout", "-b", newBranchName], {
+        cwd,
+        timeout: 120_000,
+      });
+      await notifyGitMutation(cwd, "create-branch", { invalidateForge: true });
+      return { source: "local" as const };
     },
 
     async createBranchFromBase({ cwd, baseBranch, newBranchName }) {

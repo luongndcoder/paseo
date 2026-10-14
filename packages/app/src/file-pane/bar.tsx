@@ -1,9 +1,16 @@
 import { Text, View } from "react-native";
-import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import { StyleSheet, useUnistyles, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
+import { Copy, FolderOpen, GitCommitHorizontal, History } from "lucide-react-native";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
-import { PaneContentToolbar } from "@/components/ui/pane-content-toolbar";
+import {
+  PaneContentToolbar,
+  paneContentToolbarIconSize,
+  ToolbarButton,
+  ToolbarControls,
+} from "@/components/ui/pane-content-toolbar";
 import { SegmentedControl } from "@/components/ui/segmented-control";
+import { useIsCompactFormFactor } from "@/constants/layout";
 import type { Theme } from "@/styles/theme";
 import { FileConflictAlert, type FileConflictAlertState } from "./conflict-alert";
 import type { FileEditorStatus } from "./editor/model";
@@ -20,6 +27,11 @@ export function FilePanelBar({
   cursor,
   vimMode,
   conflict,
+  onCopyPath,
+  onRevealInFileManager,
+  revealTargetName,
+  onShowGitBlame,
+  onShowGitHistory,
 }: {
   size: number;
   lineCount?: number;
@@ -29,8 +41,17 @@ export function FilePanelBar({
   cursor?: { line: number; column: number };
   vimMode?: string | null;
   conflict?: FileConflictAlertState;
+  onCopyPath?: () => void;
+  onRevealInFileManager?: () => void;
+  revealTargetName?: string;
+  onShowGitBlame?: () => void;
+  onShowGitHistory?: () => void;
 }) {
   const { t } = useTranslation();
+  const { theme } = useUnistyles();
+  const isCompact = useIsCompactFormFactor();
+  const iconSize = paneContentToolbarIconSize(isCompact);
+  const iconColor = theme.colors.foregroundMuted;
   const previewModes = [
     {
       value: "preview" as const,
@@ -108,6 +129,59 @@ export function FilePanelBar({
               options={previewModes}
             />
           ) : null}
+          {onShowGitBlame || onShowGitHistory || onCopyPath || onRevealInFileManager ? (
+            <>
+              <View style={styles.toolbarDivider} />
+              <ToolbarControls style={styles.toolbarControls}>
+                {onShowGitBlame ? (
+                  <ToolbarButton
+                    compact={isCompact}
+                    hitSlop={4}
+                    label="Git Blame (Annotate)"
+                    onPress={onShowGitBlame}
+                    testID="file-bar-git-blame"
+                  >
+                    <GitCommitHorizontal size={iconSize} strokeWidth={1.75} color={iconColor} />
+                  </ToolbarButton>
+                ) : null}
+                {onShowGitHistory ? (
+                  <ToolbarButton
+                    compact={isCompact}
+                    hitSlop={4}
+                    label="Git File History"
+                    onPress={onShowGitHistory}
+                    testID="file-bar-git-history"
+                  >
+                    <History size={iconSize} strokeWidth={1.75} color={iconColor} />
+                  </ToolbarButton>
+                ) : null}
+                {onCopyPath ? (
+                  <ToolbarButton
+                    compact={isCompact}
+                    hitSlop={4}
+                    label={t("workspace.fileActions.copyPath")}
+                    onPress={onCopyPath}
+                    testID="file-bar-copy-path"
+                  >
+                    <Copy size={iconSize} strokeWidth={1.75} color={iconColor} />
+                  </ToolbarButton>
+                ) : null}
+                {onRevealInFileManager ? (
+                  <ToolbarButton
+                    compact={isCompact}
+                    hitSlop={4}
+                    label={t("workspace.fileActions.revealIn", {
+                      target: revealTargetName ?? "Finder",
+                    })}
+                    onPress={onRevealInFileManager}
+                    testID="file-bar-reveal-in-file-manager"
+                  >
+                    <FolderOpen size={iconSize} strokeWidth={1.75} color={iconColor} />
+                  </ToolbarButton>
+                ) : null}
+              </ToolbarControls>
+            </>
+          ) : null}
         </View>
       </PaneContentToolbar>
       {conflict ? <FileConflictAlert state={conflict} /> : null}
@@ -129,7 +203,7 @@ const styles = StyleSheet.create((theme) => ({
     height: "100%",
     flexDirection: "row",
     alignItems: "center",
-    gap: theme.spacing[3],
+    gap: theme.spacing[2],
     paddingHorizontal: theme.spacing[3],
   },
   metadata: {
@@ -153,6 +227,16 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[2],
+  },
+  toolbarDivider: {
+    width: 1,
+    height: 12,
+    backgroundColor: theme.colors.border,
+    opacity: 0.7,
+    marginHorizontal: 2,
+  },
+  toolbarControls: {
+    gap: 2,
   },
   vim: {
     color: theme.colors.foregroundMuted,

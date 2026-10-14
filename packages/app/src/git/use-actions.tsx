@@ -204,6 +204,7 @@ interface UseGitActionsInput {
 interface UseGitActionsResult {
   gitActions: GitActions;
   branchLabel: string;
+  currentBranchName: string | null;
   isGit: boolean;
 }
 
@@ -312,49 +313,14 @@ function useWorkspaceScreenArchiveController({
   };
 }
 
-export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): UseGitActionsResult {
-  const { t } = useTranslation();
-  const toast = useToast();
-  const activeWorkspaceSelection = useActiveWorkspaceSelection();
-  const [postShipArchiveSuggested, setPostShipArchiveSuggested] = useState(false);
+function useShipDefaultState(repoRoot: string | null | undefined) {
   const [shipDefault, setShipDefault] = useState<"merge" | "pr">("pr");
-
-  const { status, isLoading: isStatusLoading } = useCheckoutStatusQuery({ serverId, cwd });
-  const gitStatus = status && status.isGit ? status : null;
-  const isGit = Boolean(gitStatus);
-  const notGit = status !== null && !status.isGit && !status.error;
-  const baseRef = gitStatus?.baseRef ?? undefined;
-
-  const hasUncommittedChanges = Boolean(gitStatus?.isDirty);
-
-  const {
-    status: prStatus,
-    githubFeaturesEnabled,
-    forge,
-  } = useCheckoutPrStatusQuery({
-    serverId,
-    cwd,
-    enabled: isGit,
-  });
-  const prIcon = useMemo(() => renderForgePrIcon(forge), [forge]);
-  const baseRefLabel = useMemo(
-    () => formatBaseRefLabel(baseRef, t("workspace.git.diff.base")),
-    [baseRef, t],
-  );
-  const branchLabel = resolveBranchLabel({
-    currentBranch: gitStatus?.currentBranch,
-    notGit,
-    notRepositoryLabel: t("workspace.git.diff.notRepository"),
-    unknownLabel: t("workspace.git.diff.branchUnknown"),
-  });
-
-  // Ship default persistence
   const shipDefaultStorageKey = useMemo(() => {
-    if (!gitStatus?.repoRoot) {
+    if (!repoRoot) {
       return null;
     }
-    return `@paseo:changes-ship-default:${gitStatus.repoRoot}`;
-  }, [gitStatus?.repoRoot]);
+    return `@paseo:changes-ship-default:${repoRoot}`;
+  }, [repoRoot]);
 
   useEffect(() => {
     if (!shipDefaultStorageKey) {
@@ -366,11 +332,7 @@ export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): Use
     readValidatedString(AsyncStorage, shipDefaultStorageKey, z.enum(["pr", "merge"]))
       .then((value) => {
         if (!isActive) return;
-        if (value) {
-          setShipDefault(value);
-          return;
-        }
-        setShipDefault("pr");
+        setShipDefault(value ?? "pr");
         return;
       })
       .catch(() => undefined);
@@ -391,6 +353,71 @@ export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): Use
     },
     [shipDefaultStorageKey],
   );
+
+  return { shipDefault, persistShipDefault };
+}
+
+function resolveGitStatusSummary(status: CheckoutStatusPayload | null) {
+  const gitStatus = status && status.isGit ? status : null;
+  const isGit = Boolean(gitStatus);
+  const notGit = status !== null && !status.isGit && !status.error;
+  const baseRef = gitStatus?.baseRef ?? undefined;
+  const hasUncommittedChanges = Boolean(gitStatus?.isDirty);
+  const currentBranch = gitStatus?.currentBranch;
+  const currentBranchName = currentBranch && currentBranch !== "HEAD" ? currentBranch : null;
+  const repoRoot = gitStatus?.repoRoot;
+  return {
+    gitStatus,
+    isGit,
+    notGit,
+    baseRef,
+    hasUncommittedChanges,
+    currentBranch,
+    currentBranchName,
+    repoRoot,
+  };
+}
+
+export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): UseGitActionsResult {
+  const { t } = useTranslation();
+  const toast = useToast();
+  const activeWorkspaceSelection = useActiveWorkspaceSelection();
+  const [postShipArchiveSuggested, setPostShipArchiveSuggested] = useState(false);
+
+  const { status, isLoading: isStatusLoading } = useCheckoutStatusQuery({ serverId, cwd });
+  const {
+    gitStatus,
+    isGit,
+    notGit,
+    baseRef,
+    hasUncommittedChanges,
+    currentBranch,
+    currentBranchName,
+    repoRoot,
+  } = resolveGitStatusSummary(status);
+
+  const {
+    status: prStatus,
+    githubFeaturesEnabled,
+    forge,
+  } = useCheckoutPrStatusQuery({
+    serverId,
+    cwd,
+    enabled: isGit,
+  });
+  const prIcon = useMemo(() => renderForgePrIcon(forge), [forge]);
+  const baseRefLabel = useMemo(
+    () => formatBaseRefLabel(baseRef, t("workspace.git.diff.base")),
+    [baseRef, t],
+  );
+  const branchLabel = resolveBranchLabel({
+    currentBranch,
+    notGit,
+    notRepositoryLabel: t("workspace.git.diff.notRepository"),
+    unknownLabel: t("workspace.git.diff.branchUnknown"),
+  });
+
+  const { shipDefault, persistShipDefault } = useShipDefaultState(repoRoot);
 
   useEffect(() => {
     setPostShipArchiveSuggested(false);
@@ -865,7 +892,7 @@ export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): Use
     [gitActionsInput, baseRefLabel, hasPullRequest, forge, t],
   );
 
-  return { gitActions, branchLabel, isGit };
+  return { gitActions, branchLabel, currentBranchName, isGit };
 }
 
 function translateGitActions(

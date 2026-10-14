@@ -44,14 +44,22 @@ import {
   commitChanges,
   createPullRequest,
   discardChanges,
+  executeGitLogAction,
   forgeAuthStateFromError,
+  getCommitFileDiff,
+  getGitCompareDetail,
+  getGitConflictFile,
+  getGitFileBlame,
+  getGitStashDetail,
   isForgeAuthError,
+  listCheckoutCommits,
   mergeFromBase,
   mergeToBase,
   pullCurrentBranch,
   pushCurrentBranch,
-  listCheckoutCommits,
-  getCommitFileDiff,
+  queryGitGraphAndRefs,
+  stageChanges,
+  unstageChanges,
 } from "../../../utils/checkout-git.js";
 import { runGitCommand } from "../../../utils/run-git-command.js";
 import { expandTilde } from "../../../utils/path.js";
@@ -121,7 +129,10 @@ export interface CheckoutDiffSubscriber {
 
 export interface CheckoutSessionOptions {
   host: CheckoutSessionHost;
-  gitMutation: Pick<GitMutationService, "checkoutExistingBranch" | "notifyGitMutation">;
+  gitMutation: Pick<
+    GitMutationService,
+    "checkoutExistingBranch" | "checkoutNewBranch" | "notifyGitMutation"
+  >;
   workspaceGitService: WorkspaceGitService;
   github: ForgeService;
   checkoutDiffManager: CheckoutDiffSubscriber;
@@ -147,7 +158,7 @@ export class CheckoutSession {
   private readonly host: CheckoutSessionHost;
   private readonly gitMutation: Pick<
     GitMutationService,
-    "checkoutExistingBranch" | "notifyGitMutation"
+    "checkoutExistingBranch" | "checkoutNewBranch" | "notifyGitMutation"
   >;
   private readonly workspaceGitService: WorkspaceGitService;
   private readonly github: ForgeService;
@@ -272,10 +283,124 @@ export class CheckoutSession {
 
   async handleCommitsListRequest(msg: CheckoutCommitsListRequest): Promise<void> {
     const { cwd, requestId } = msg;
+    const expandedCwd = expandTilde(cwd);
 
     try {
+      if (msg.gitAction) {
+        const actionResult = await executeGitLogAction(expandedCwd, msg.gitAction);
+        await this.gitMutation.notifyGitMutation(expandedCwd, "commit-changes");
+        this.scheduleDiffRefresh(cwd);
+        this.host.emit({
+          type: "checkout.commits.list.response",
+          payload: {
+            cwd,
+            baseRef: null,
+            commits: [],
+            actionResult,
+            error: null,
+            requestId,
+          },
+        });
+        return;
+      }
+
+      if (msg.conflictFilePath) {
+        const conflictFile = await getGitConflictFile(expandedCwd, msg.conflictFilePath);
+        this.host.emit({
+          type: "checkout.commits.list.response",
+          payload: {
+            cwd,
+            baseRef: null,
+            commits: [],
+            conflictFile,
+            error: null,
+            requestId,
+          },
+        });
+        return;
+      }
+
+      if (typeof msg.stashIndex === "number") {
+        const stashDetail = await getGitStashDetail(expandedCwd, msg.stashIndex);
+        this.host.emit({
+          type: "checkout.commits.list.response",
+          payload: {
+            cwd,
+            baseRef: null,
+            commits: [],
+            stashDetail,
+            error: null,
+            requestId,
+          },
+        });
+        return;
+      }
+
+      if (msg.compareRef) {
+        const compareDetail = await getGitCompareDetail(expandedCwd, msg.compareRef);
+        this.host.emit({
+          type: "checkout.commits.list.response",
+          payload: {
+            cwd,
+            baseRef: null,
+            commits: [],
+            compareDetail,
+            error: null,
+            requestId,
+          },
+        });
+        return;
+      }
+
+      if (msg.blamePath) {
+        const blameLines = await getGitFileBlame(expandedCwd, msg.blamePath);
+        this.host.emit({
+          type: "checkout.commits.list.response",
+          payload: {
+            cwd,
+            baseRef: null,
+            commits: [],
+            blameLines,
+            error: null,
+            requestId,
+          },
+        });
+        return;
+      }
+
+      if (
+        msg.includeGraph ||
+        msg.allBranches !== undefined ||
+        msg.ref ||
+        msg.search ||
+        msg.author ||
+        msg.filePath
+      ) {
+        const graphResult = await queryGitGraphAndRefs({
+          cwd: expandedCwd,
+          allBranches: msg.allBranches,
+          ref: msg.ref,
+          search: msg.search,
+          author: msg.author,
+          filePath: msg.filePath,
+          limit: msg.limit,
+        });
+        this.host.emit({
+          type: "checkout.commits.list.response",
+          payload: {
+            cwd,
+            ...graphResult,
+            stashes: graphResult.stashes,
+            conflictState: graphResult.conflictState,
+            error: null,
+            requestId,
+          },
+        });
+        return;
+      }
+
       const { baseRef, commits } = await listCheckoutCommits({
-        cwd: expandTilde(cwd),
+        cwd: expandedCwd,
         context: { paseoHome: this.paseoHome, worktreesRoot: this.worktreesRoot },
       });
       this.host.emit({
@@ -558,8 +683,11 @@ export class CheckoutSession {
     const { cwd, branch, requestId } = msg;
 
     try {
-      const checkoutResult = await this.gitMutation.checkoutExistingBranch(cwd, branch);
+      const checkoutResult = msg.create
+        ? await this.gitMutation.checkoutNewBranch(cwd, branch)
+        : await this.gitMutation.checkoutExistingBranch(cwd, branch);
       this.scheduleDiffRefresh(cwd);
+      this.host.handleWorkspaceGitBranchSnapshot(cwd, branch);
 
       // Push a workspace_update immediately so the sidebar/header reflect
       // the new branch name without waiting for the background git watcher.
@@ -649,9 +777,15 @@ export class CheckoutSession {
   async handleCheckoutDiscardChangesRequest(
     msg: Extract<SessionInboundMessage, { type: "checkout.discard_changes.request" }>,
   ): Promise<void> {
-    const { cwd, paths, requestId } = msg;
+    const { cwd, paths, action, requestId } = msg;
     try {
-      await discardChanges(cwd, paths);
+      if (action === "stage") {
+        await stageChanges(cwd, paths);
+      } else if (action === "unstage") {
+        await unstageChanges(cwd, paths);
+      } else {
+        await discardChanges(cwd, paths);
+      }
       await this.gitMutation.notifyGitMutation(cwd, "discard-changes");
       this.scheduleDiffRefresh(cwd);
       this.host.emit({
@@ -671,10 +805,12 @@ export class CheckoutSession {
   ): Promise<void> {
     const { cwd, requestId } = msg;
     try {
+      const customMessage = msg.message?.trim() ?? "";
       const branchLabel = msg.branch?.trim() ?? "";
-      const message = branchLabel
+      const defaultMessage = branchLabel
         ? `${CheckoutSession.PASEO_STASH_PREFIX} ${branchLabel}`
         : `${CheckoutSession.PASEO_STASH_PREFIX} unnamed`;
+      const message = customMessage || defaultMessage;
       await runGitCommand(["stash", "push", "--include-untracked", "-m", message], {
         cwd,
         timeout: 120_000,
@@ -696,9 +832,15 @@ export class CheckoutSession {
   async handleStashPopRequest(
     msg: Extract<SessionInboundMessage, { type: "stash_pop_request" }>,
   ): Promise<void> {
-    const { cwd, stashIndex, requestId } = msg;
+    const { cwd, stashIndex, action, requestId } = msg;
     try {
-      await runGitCommand(["stash", "pop", `stash@{${stashIndex}}`], {
+      let subcommand: "apply" | "drop" | "pop" = "pop";
+      if (action === "apply") {
+        subcommand = "apply";
+      } else if (action === "drop") {
+        subcommand = "drop";
+      }
+      await runGitCommand(["stash", subcommand, `stash@{${stashIndex}}`], {
         cwd,
         timeout: 120_000,
       });
@@ -742,18 +884,38 @@ export class CheckoutSession {
     const { cwd, requestId } = msg;
 
     try {
+      if (msg.generateMessageOnly) {
+        const generatedMessage = await this.gitMetadataGenerator.generateCommitMessage(cwd);
+        this.host.emit({
+          type: "checkout_commit_response",
+          payload: {
+            cwd,
+            success: true,
+            generatedMessage,
+            error: null,
+            requestId,
+          },
+        });
+        return;
+      }
+
       let message = msg.message?.trim() ?? "";
-      if (!message) {
+      if (!message && !msg.amend) {
         message = await this.gitMetadataGenerator.generateCommitMessage(cwd);
       }
-      if (!message) {
+      if (!message && !msg.amend) {
         throw new Error("Commit message is required");
       }
 
       await commitChanges(cwd, {
         message,
         addAll: msg.addAll ?? true,
+        paths: msg.paths,
+        amend: msg.amend,
       });
+      if (msg.push) {
+        await pushCurrentBranch(cwd);
+      }
       await this.gitMutation.notifyGitMutation(cwd, "commit-changes");
       this.scheduleDiffRefresh(cwd);
 
@@ -762,6 +924,7 @@ export class CheckoutSession {
         payload: {
           cwd,
           success: true,
+          generatedMessage: message,
           error: null,
           requestId,
         },

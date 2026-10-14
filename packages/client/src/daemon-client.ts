@@ -46,6 +46,15 @@ import type {
   GitSetupOptions,
   CheckoutStatusResponse,
   CheckoutCommit,
+  CheckoutGitLogAction,
+  CheckoutGitBranchNode,
+  CheckoutGitRemoteBranchNode,
+  CheckoutGitTagNode,
+  CheckoutGitStashNode,
+  CheckoutGitConflictState,
+  CheckoutGitConflictFilePayload,
+  CheckoutGitDiffDetail,
+  CheckoutGitBlameLine,
   ParsedDiffFile,
   CheckoutCommitResponse,
   CheckoutMergeResponse,
@@ -4180,7 +4189,14 @@ export class DaemonClient {
 
   async checkoutCommit(
     cwd: string,
-    input: { message?: string; addAll?: boolean },
+    input: {
+      message?: string;
+      addAll?: boolean;
+      paths?: string[];
+      amend?: boolean;
+      push?: boolean;
+      generateMessageOnly?: boolean;
+    },
     requestId?: string,
   ): Promise<CheckoutCommitPayload> {
     return this.sendCorrelatedSessionRequest({
@@ -4190,9 +4206,22 @@ export class DaemonClient {
         cwd,
         message: input.message,
         addAll: input.addAll,
+        ...(input.paths !== undefined ? { paths: input.paths } : {}),
+        ...(input.amend !== undefined ? { amend: input.amend } : {}),
+        ...(input.push !== undefined ? { push: input.push } : {}),
+        ...(input.generateMessageOnly !== undefined
+          ? { generateMessageOnly: input.generateMessageOnly }
+          : {}),
       },
       responseType: "checkout_commit_response",
     });
+  }
+
+  async checkoutGenerateCommitMessage(
+    cwd: string,
+    requestId?: string,
+  ): Promise<CheckoutCommitPayload> {
+    return this.checkoutCommit(cwd, { generateMessageOnly: true }, requestId);
   }
 
   async checkoutMerge(
@@ -4280,6 +4309,167 @@ export class DaemonClient {
       throw new Error(payload.error.message);
     }
     return { baseRef: payload.baseRef, commits: payload.commits };
+  }
+
+  async queryGitGraphLog(
+    cwd: string,
+    options?: {
+      allBranches?: boolean;
+      ref?: string;
+      search?: string;
+      author?: string;
+      filePath?: string;
+      limit?: number;
+    },
+    requestId?: string,
+  ): Promise<{
+    baseRef: string | null;
+    commits: CheckoutCommit[];
+    headSha: string | null;
+    currentBranch: string | null;
+    lastCommitMessage: string | null;
+    branches: CheckoutGitBranchNode[];
+    remoteBranches: CheckoutGitRemoteBranchNode[];
+    tags: CheckoutGitTagNode[];
+    stashes: CheckoutGitStashNode[];
+    conflictState: CheckoutGitConflictState;
+  }> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"checkout.commits.list.response">({
+        requestId,
+        message: {
+          type: "checkout.commits.list.request",
+          cwd,
+          includeGraph: true,
+          ...(options?.allBranches !== undefined ? { allBranches: options.allBranches } : {}),
+          ...(options?.ref ? { ref: options.ref } : {}),
+          ...(options?.search ? { search: options.search } : {}),
+          ...(options?.author ? { author: options.author } : {}),
+          ...(options?.filePath ? { filePath: options.filePath } : {}),
+          ...(options?.limit !== undefined ? { limit: options.limit } : {}),
+        },
+        timeout: 60000,
+      });
+    if (payload.error) {
+      throw new Error(payload.error.message);
+    }
+    return {
+      baseRef: payload.baseRef,
+      commits: payload.commits,
+      headSha: payload.headSha ?? null,
+      currentBranch: payload.currentBranch ?? null,
+      lastCommitMessage: payload.lastCommitMessage ?? null,
+      branches: payload.branches ?? [],
+      remoteBranches: payload.remoteBranches ?? [],
+      tags: payload.tags ?? [],
+      stashes: payload.stashes ?? [],
+      conflictState: payload.conflictState ?? { inProgress: null, conflictFiles: [] },
+    };
+  }
+
+  async runGitLogAction(
+    cwd: string,
+    gitAction: CheckoutGitLogAction,
+    requestId?: string,
+  ): Promise<{ success: boolean; message?: string }> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"checkout.commits.list.response">({
+        requestId,
+        message: {
+          type: "checkout.commits.list.request",
+          cwd,
+          gitAction,
+        },
+        timeout: 120000,
+      });
+    if (payload.error) {
+      throw new Error(payload.error.message);
+    }
+    return payload.actionResult ?? { success: true };
+  }
+
+  async getGitBlame(
+    cwd: string,
+    filePath: string,
+    requestId?: string,
+  ): Promise<{ blameLines: CheckoutGitBlameLine[] }> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"checkout.commits.list.response">({
+        requestId,
+        message: {
+          type: "checkout.commits.list.request",
+          cwd,
+          blamePath: filePath,
+        },
+        timeout: 60000,
+      });
+    if (payload.error) {
+      throw new Error(payload.error.message);
+    }
+    return { blameLines: payload.blameLines ?? [] };
+  }
+
+  async getGitConflictFile(
+    cwd: string,
+    conflictFilePath: string,
+    requestId?: string,
+  ): Promise<{ conflictFile: CheckoutGitConflictFilePayload | null }> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"checkout.commits.list.response">({
+        requestId,
+        message: {
+          type: "checkout.commits.list.request",
+          cwd,
+          conflictFilePath,
+        },
+        timeout: 60000,
+      });
+    if (payload.error) {
+      throw new Error(payload.error.message);
+    }
+    return { conflictFile: payload.conflictFile ?? null };
+  }
+
+  async getGitStashDetail(
+    cwd: string,
+    stashIndex: number,
+    requestId?: string,
+  ): Promise<{ stashDetail: CheckoutGitDiffDetail | null }> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"checkout.commits.list.response">({
+        requestId,
+        message: {
+          type: "checkout.commits.list.request",
+          cwd,
+          stashIndex,
+        },
+        timeout: 60000,
+      });
+    if (payload.error) {
+      throw new Error(payload.error.message);
+    }
+    return { stashDetail: payload.stashDetail ?? null };
+  }
+
+  async getGitCompareDetail(
+    cwd: string,
+    compareRef: string,
+    requestId?: string,
+  ): Promise<{ compareDetail: CheckoutGitDiffDetail | null }> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"checkout.commits.list.response">({
+        requestId,
+        message: {
+          type: "checkout.commits.list.request",
+          cwd,
+          compareRef,
+        },
+        timeout: 60000,
+      });
+    if (payload.error) {
+      throw new Error(payload.error.message);
+    }
+    return { compareDetail: payload.compareDetail ?? null };
   }
 
   async getCommitFileDiff(
@@ -4457,6 +4647,7 @@ export class DaemonClient {
     cwd: string,
     branch: string,
     requestId?: string,
+    options?: { create?: boolean },
   ): Promise<CheckoutSwitchBranchPayload> {
     return this.sendCorrelatedSessionRequest({
       requestId,
@@ -4464,6 +4655,7 @@ export class DaemonClient {
         type: "checkout_switch_branch_request",
         cwd,
         branch,
+        ...(options?.create !== undefined ? { create: options.create } : {}),
       },
       responseType: "checkout_switch_branch_response",
     });
@@ -4483,7 +4675,7 @@ export class DaemonClient {
 
   async stashSave(
     cwd: string,
-    options?: { branch?: string },
+    options?: { branch?: string; message?: string },
     requestId?: string,
   ): Promise<StashSavePayload> {
     return this.sendCorrelatedSessionRequest({
@@ -4492,18 +4684,25 @@ export class DaemonClient {
         type: "stash_save_request",
         cwd,
         branch: options?.branch,
+        ...(options?.message !== undefined ? { message: options.message } : {}),
       },
       responseType: "stash_save_response",
     });
   }
 
-  async stashPop(cwd: string, stashIndex: number, requestId?: string): Promise<StashPopPayload> {
+  async stashPop(
+    cwd: string,
+    stashIndex: number,
+    requestId?: string,
+    options?: { action?: "pop" | "apply" | "drop" },
+  ): Promise<StashPopPayload> {
     return this.sendCorrelatedSessionRequest({
       requestId,
       message: {
         type: "stash_pop_request",
         cwd,
         stashIndex,
+        ...(options?.action !== undefined ? { action: options.action } : {}),
       },
       responseType: "stash_pop_response",
     });
@@ -4897,11 +5096,30 @@ export class DaemonClient {
 
   async checkoutDiscardChanges(
     cwd: string,
-    input: { paths: string[] },
+    input: { paths: string[]; action?: "discard" | "stage" | "unstage" },
   ): Promise<CorrelatedResponsePayload<"checkout.discard_changes.response">> {
     return this.sendNamespacedCorrelatedSessionRequest<"checkout.discard_changes.response">({
-      message: { type: "checkout.discard_changes.request", cwd, paths: input.paths },
+      message: {
+        type: "checkout.discard_changes.request",
+        cwd,
+        paths: input.paths,
+        ...(input.action !== undefined ? { action: input.action } : {}),
+      },
     });
+  }
+
+  async checkoutStageChanges(
+    cwd: string,
+    input: { paths: string[] },
+  ): Promise<CorrelatedResponsePayload<"checkout.discard_changes.response">> {
+    return this.checkoutDiscardChanges(cwd, { paths: input.paths, action: "stage" });
+  }
+
+  async checkoutUnstageChanges(
+    cwd: string,
+    input: { paths: string[] },
+  ): Promise<CorrelatedResponsePayload<"checkout.discard_changes.response">> {
+    return this.checkoutDiscardChanges(cwd, { paths: input.paths, action: "unstage" });
   }
 
   async uploadFile(input: FileUploadInput): Promise<FileUploadResult> {
@@ -6960,6 +7178,48 @@ export class DaemonClient {
     };
 
     return { promise, cancel };
+  }
+
+  async listAvailableEditors(
+    requestId?: string,
+  ): Promise<CorrelatedResponsePayload<"list_available_editors_response">> {
+    const resolvedRequestId = this.createRequestId(requestId);
+    const message = SessionInboundMessageSchema.parse({
+      type: "list_available_editors_request",
+      requestId: resolvedRequestId,
+    });
+    return this.sendCorrelatedRequest({
+      requestId: resolvedRequestId,
+      message,
+      responseType: "list_available_editors_response",
+      options: { skipQueue: true },
+    });
+  }
+
+  async openInEditor(
+    input: {
+      editorId: string;
+      path: string;
+      cwd?: string;
+      mode?: "open" | "reveal";
+    },
+    requestId?: string,
+  ): Promise<CorrelatedResponsePayload<"open_in_editor_response">> {
+    const resolvedRequestId = this.createRequestId(requestId);
+    const message = SessionInboundMessageSchema.parse({
+      type: "open_in_editor_request",
+      editorId: input.editorId,
+      path: input.path,
+      ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+      ...(input.mode !== undefined ? { mode: input.mode } : {}),
+      requestId: resolvedRequestId,
+    });
+    return this.sendCorrelatedRequest({
+      requestId: resolvedRequestId,
+      message,
+      responseType: "open_in_editor_response",
+      options: { skipQueue: true },
+    });
   }
 }
 

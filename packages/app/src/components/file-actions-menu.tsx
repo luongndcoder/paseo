@@ -12,7 +12,9 @@ import {
   FolderOpen,
   FolderPlus,
   MessageSquarePlus,
+  Minus,
   Pencil,
+  Plus,
   Trash2,
   Undo2,
   type LucideIcon,
@@ -66,6 +68,8 @@ interface FileActionsContextMenuContentProps {
   onCollapseFolder?: () => void;
   onRename?: () => void;
   onDuplicate?: () => void;
+  onStage?: () => void;
+  onUnstage?: () => void;
   onRevert?: () => void;
   onDelete?: () => void;
   testIDPrefix?: string;
@@ -93,6 +97,8 @@ export function FileActionsContextMenuContent({
   onCollapseFolder,
   onRename,
   onDuplicate,
+  onStage,
+  onUnstage,
   onRevert,
   onDelete,
   testIDPrefix,
@@ -202,24 +208,30 @@ export function FileActionsContextMenuContent({
             onSelect: onAddToChat,
           }
         : null,
-      onRename
-        ? {
-            key: "rename",
-            group: "manage",
-            label: t("workspace.fileActions.rename"),
-            icon: Pencil,
-            onSelect: onRename,
-          }
-        : null,
-      onDuplicate
-        ? {
-            key: "duplicate",
-            group: "manage",
-            label: t("workspace.fileActions.duplicate"),
-            icon: CopyPlus,
-            onSelect: onDuplicate,
-          }
-        : null,
+      optionalFileAction(true, onRename, {
+        key: "rename",
+        group: "manage",
+        label: t("workspace.fileActions.rename"),
+        icon: Pencil,
+      }),
+      optionalFileAction(true, onDuplicate, {
+        key: "duplicate",
+        group: "manage",
+        label: t("workspace.fileActions.duplicate"),
+        icon: CopyPlus,
+      }),
+      optionalFileAction(true, onStage, {
+        key: "stage",
+        group: "manage",
+        label: t("workspace.fileActions.stage", { defaultValue: "Stage Changes" }),
+        icon: Plus,
+      }),
+      optionalFileAction(true, onUnstage, {
+        key: "unstage",
+        group: "manage",
+        label: t("workspace.fileActions.unstage", { defaultValue: "Unstage Changes" }),
+        icon: Minus,
+      }),
       onRevert
         ? {
             key: "revert",
@@ -265,6 +277,8 @@ export function FileActionsContextMenuContent({
     onOpenToSide,
     onRename,
     onReveal,
+    onStage,
+    onUnstage,
     onRevert,
     revealTargetName,
     t,

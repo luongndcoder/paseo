@@ -14,16 +14,20 @@ import { StyleSheet, UnistylesRuntime, withUnistyles } from "react-native-unisty
 import { useTranslation } from "react-i18next";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useSessionStore, type ExplorerFile } from "@/stores/session-store";
-import { filePreviewRenderKind } from "@/components/file-pane-render-mode";
+import { filePreviewRenderKind, plantUmlFileAsMarkdown } from "@/components/file-pane-render-mode";
+import * as Clipboard from "expo-clipboard";
 import { useAttachmentPreviewUrl } from "@/attachments/use-attachment-preview-url";
 import { getFileNameFromPath } from "@/attachments/utils";
 import { resolveFilePreviewReadTarget } from "@/file-explorer/preview-target";
-import type { WorkspaceFileLocation } from "@/workspace/file-open";
+import { resolveWorkspaceFilePaths, type WorkspaceFileLocation } from "@/workspace/file-open";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { useAppActivelyVisible } from "@/hooks/use-app-visible";
 import { isFileQueryEnabled } from "@/components/file-pane-enabled";
 import { isWeb } from "@/constants/platform";
+import { useToast } from "@/contexts/toast-context";
+import { useIsLocalExecution } from "@/hooks/use-is-local-daemon";
 import { useAppSettings } from "@/hooks/use-settings";
+import { openDesktopTarget, useDesktopOpenTargets } from "@/workspace/desktop-open-targets";
 import { useLiveFile } from "./live-file/hook";
 import { useFilePreview } from "./preview-lifecycle/hook";
 import { resolveFilePreviewLifecycle } from "./preview-lifecycle/model";
@@ -40,6 +44,8 @@ import { confirmDialog } from "@/utils/confirm-dialog";
 import { usePublishPanelInstanceAttributes } from "@/panels/panel-instance-attributes";
 import type { Theme } from "@/styles/theme";
 import { ZoomableImage } from "@/components/zoomable-viewport/image";
+import { GitBlameModal } from "@/git/pycharm-git-window/git-blame-modal";
+import { PyCharmGitModal } from "@/git/pycharm-git-window/pycharm-git-modal";
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const foregroundMutedColorMapping = (theme: Theme) => ({
@@ -180,7 +186,8 @@ function FilePreviewBody({
       );
     }
 
-    if (renderKind === "markdown") {
+    if (renderKind === "markdown" || renderKind === "plantuml") {
+      const content = preview.content ?? "";
       return (
         <View style={styles.previewScrollContainer}>
           <RNScrollView
@@ -189,7 +196,7 @@ function FilePreviewBody({
             showsVerticalScrollIndicator
           >
             <FileMarkdownPreview
-              source={preview.content ?? ""}
+              source={renderKind === "plantuml" ? plantUmlFileAsMarkdown(content) : content}
               filePath={filePath}
               workspaceRoot={workspaceRoot}
               client={client}
@@ -306,31 +313,143 @@ export function FilePane({
     previewLifecycle.status === "read_pending" ||
     previewLifecycle.status === "preparing";
 
+  const barActions = useFilePaneBarActions({
+    serverId,
+    normalizedWorkspaceRoot,
+    normalizedFilePath,
+  });
+
+  const [gitBlameOpen, setGitBlameOpen] = useState(false);
+  const [gitHistoryOpen, setGitHistoryOpen] = useState(false);
+  const [selectedBlameCommitSha, setSelectedBlameCommitSha] = useState<string | null>(null);
+
+  const relativeGitFilePath = useMemo(() => {
+    if (!readTarget) return "";
+    const normalizedCwd = readTarget.cwd.replace(/[\\/]+$/, "");
+    const normalizedPath = readTarget.path.replace(/\\/g, "/");
+    if (normalizedCwd && normalizedPath.startsWith(`${normalizedCwd}/`)) {
+      return normalizedPath.slice(normalizedCwd.length + 1);
+    }
+    return normalizedPath.replace(/^\.\//, "");
+  }, [readTarget]);
+
+  const canUseGitFileTools = Boolean(client && readTarget && preview?.kind !== "binary");
+
   return (
-    <FilePanePresentation
-      serverId={serverId}
-      workspaceRoot={normalizedWorkspaceRoot}
-      client={client}
-      readTarget={readTarget}
-      preview={preview}
-      liveFile={liveFile.model}
-      onRetryRead={liveFile.refresh}
-      retryingRead={liveFile.isRetrying}
-      retryLabel={t("common.actions.retry")}
-      filename={getFileNameFromPath(location.path) ?? location.path}
-      previewMode={canTogglePreviewMode ? previewMode : undefined}
-      onPreviewModeChange={canTogglePreviewMode ? setPreviewMode : undefined}
-      lineCount={lineCount}
-      editable={editable}
-      disconnectedMessage={t("workspace.terminal.hostDisconnected")}
-      errorMessage={errorMessage}
-      isLoading={isLoading}
-      isMobile={isMobile}
-      location={location}
-      navigationRevision={navigationRevision}
-      imagePreviewUri={imagePreviewUri}
-    />
+    <>
+      <FilePanePresentation
+        serverId={serverId}
+        workspaceRoot={normalizedWorkspaceRoot}
+        client={client}
+        readTarget={readTarget}
+        preview={preview}
+        liveFile={liveFile.model}
+        onRetryRead={liveFile.refresh}
+        retryingRead={liveFile.isRetrying}
+        retryLabel={t("common.actions.retry")}
+        filename={getFileNameFromPath(location.path) ?? location.path}
+        previewMode={canTogglePreviewMode ? previewMode : undefined}
+        onPreviewModeChange={canTogglePreviewMode ? setPreviewMode : undefined}
+        lineCount={lineCount}
+        editable={editable}
+        disconnectedMessage={t("workspace.terminal.hostDisconnected")}
+        errorMessage={errorMessage}
+        isLoading={isLoading}
+        isMobile={isMobile}
+        location={location}
+        navigationRevision={navigationRevision}
+        imagePreviewUri={imagePreviewUri}
+        onCopyPath={barActions.onCopyPath}
+        onRevealInFileManager={barActions.onRevealInFileManager}
+        revealTargetName={barActions.revealTargetName}
+        onShowGitBlame={canUseGitFileTools ? () => setGitBlameOpen(true) : undefined}
+        onShowGitHistory={
+          canUseGitFileTools
+            ? () => {
+                setSelectedBlameCommitSha(null);
+                setGitHistoryOpen(true);
+              }
+            : undefined
+        }
+      />
+      {readTarget ? (
+        <>
+          <GitBlameModal
+            visible={gitBlameOpen}
+            onClose={() => setGitBlameOpen(false)}
+            serverId={serverId}
+            cwd={readTarget.cwd}
+            filePath={relativeGitFilePath}
+            onOpenFileHistory={() => {
+              setGitBlameOpen(false);
+              setSelectedBlameCommitSha(null);
+              setGitHistoryOpen(true);
+            }}
+            onInspectCommit={(sha) => {
+              setGitBlameOpen(false);
+              setSelectedBlameCommitSha(sha);
+              setGitHistoryOpen(true);
+            }}
+          />
+          <PyCharmGitModal
+            visible={gitHistoryOpen}
+            onClose={() => setGitHistoryOpen(false)}
+            serverId={serverId}
+            cwd={readTarget.cwd}
+            initialFilePath={relativeGitFilePath}
+            initialCommitSha={selectedBlameCommitSha}
+          />
+        </>
+      ) : null}
+    </>
   );
+}
+
+function useFilePaneBarActions(input: {
+  serverId: string;
+  normalizedWorkspaceRoot: string;
+  normalizedFilePath: string | null;
+}) {
+  const { serverId, normalizedWorkspaceRoot, normalizedFilePath } = input;
+  const { t } = useTranslation();
+  const toast = useToast();
+  const isLocalExecution = useIsLocalExecution(serverId);
+  const { targets: desktopOpenTargets } = useDesktopOpenTargets({ isLocalExecution });
+  const fileManagerTarget = desktopOpenTargets.find((target) => target.kind === "file-manager");
+  const resolvedFilePaths = useMemo(
+    () =>
+      normalizedFilePath
+        ? resolveWorkspaceFilePaths({
+            path: normalizedFilePath,
+            workspaceRoot: normalizedWorkspaceRoot,
+          })
+        : null,
+    [normalizedFilePath, normalizedWorkspaceRoot],
+  );
+  const handleCopyPath = useCallback(() => {
+    const targetPath = resolvedFilePaths?.absolutePath ?? normalizedFilePath;
+    if (!targetPath) return;
+    void Clipboard.setStringAsync(targetPath);
+  }, [normalizedFilePath, resolvedFilePaths]);
+  const handleRevealInFileManager = useCallback(() => {
+    if (!fileManagerTarget || !resolvedFilePaths) return;
+    void openDesktopTarget({
+      editorId: fileManagerTarget.id,
+      workspacePath: normalizedWorkspaceRoot || resolvedFilePaths.absolutePath,
+      filePath: resolvedFilePaths.absolutePath,
+    }).catch((cause) => {
+      toast.error(
+        cause instanceof Error ? cause.message : t("workspace.fileExplorer.errors.revealFailed"),
+      );
+    });
+  }, [fileManagerTarget, normalizedWorkspaceRoot, resolvedFilePaths, t, toast]);
+
+  return {
+    onCopyPath: resolvedFilePaths || normalizedFilePath ? handleCopyPath : undefined,
+    onRevealInFileManager:
+      fileManagerTarget && resolvedFilePaths ? handleRevealInFileManager : undefined,
+    revealTargetName: fileManagerTarget?.name,
+  };
 }
 
 function isRenderablePreview(preview: ExplorerFile | null, path: string): boolean {
@@ -371,6 +490,11 @@ function FilePanePresentation({
   location,
   navigationRevision,
   imagePreviewUri,
+  onCopyPath,
+  onRevealInFileManager,
+  revealTargetName,
+  onShowGitBlame,
+  onShowGitHistory,
 }: {
   serverId: string;
   workspaceRoot: string;
@@ -393,6 +517,11 @@ function FilePanePresentation({
   location: WorkspaceFileLocation;
   navigationRevision: number;
   imagePreviewUri: string | null;
+  onCopyPath?: () => void;
+  onRevealInFileManager?: () => void;
+  revealTargetName?: string;
+  onShowGitBlame?: () => void;
+  onShowGitHistory?: () => void;
 }) {
   if (!client && readTarget) {
     return (
@@ -424,6 +553,11 @@ function FilePanePresentation({
         isMobile={isMobile}
         location={location}
         navigationRevision={navigationRevision}
+        onCopyPath={onCopyPath}
+        onRevealInFileManager={onRevealInFileManager}
+        revealTargetName={revealTargetName}
+        onShowGitBlame={onShowGitBlame}
+        onShowGitHistory={onShowGitHistory}
       />
     );
   }
@@ -456,6 +590,11 @@ function FilePanePresentation({
           lineCount={lineCount}
           mode={previewMode}
           onModeChange={onPreviewModeChange}
+          onCopyPath={onCopyPath}
+          onRevealInFileManager={onRevealInFileManager}
+          revealTargetName={revealTargetName}
+          onShowGitBlame={onShowGitBlame}
+          onShowGitHistory={onShowGitHistory}
         />
       ) : null}
       <FilePreviewBody
@@ -491,6 +630,11 @@ function EditableFilePane({
   isMobile,
   location,
   navigationRevision,
+  onCopyPath,
+  onRevealInFileManager,
+  revealTargetName,
+  onShowGitBlame,
+  onShowGitHistory,
 }: {
   serverId: string;
   workspaceRoot: string;
@@ -508,6 +652,11 @@ function EditableFilePane({
   isMobile: boolean;
   location: WorkspaceFileLocation;
   navigationRevision: number;
+  onCopyPath?: () => void;
+  onRevealInFileManager?: () => void;
+  revealTargetName?: string;
+  onShowGitBlame?: () => void;
+  onShowGitHistory?: () => void;
 }) {
   const { settings } = useAppSettings();
   const { t } = useTranslation();
@@ -625,6 +774,11 @@ function EditableFilePane({
         conflict={conflict}
         mode={mode}
         onModeChange={onModeChange}
+        onCopyPath={onCopyPath}
+        onRevealInFileManager={onRevealInFileManager}
+        revealTargetName={revealTargetName}
+        onShowGitBlame={onShowGitBlame}
+        onShowGitHistory={onShowGitHistory}
       />
       {showSource ? (
         <FileEditorView

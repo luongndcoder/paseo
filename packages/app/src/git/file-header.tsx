@@ -1,5 +1,6 @@
 import { memo, type ReactElement, useCallback, useMemo, useState } from "react";
 import {
+  Pressable,
   Text,
   View,
   type GestureResponderEvent,
@@ -51,7 +52,11 @@ export interface FileHeaderProps {
   revealTargetName?: string;
   onDownload?: (path: string) => void;
   onDuplicate?: (path: string) => void;
+  onStage?: (path: string, oldPath?: string) => void;
+  onUnstage?: (path: string, oldPath?: string) => void;
   onRevert?: (path: string, oldPath?: string) => void;
+  checked?: boolean;
+  onToggleCheck?: (path: string) => void;
   onHeaderHeightChange?: (path: string, height: number) => void;
   testID?: string;
   canvasRendered?: boolean;
@@ -145,6 +150,8 @@ function FileHeaderMenu({
   revealTargetName,
   onDownload,
   onDuplicate,
+  onStage,
+  onUnstage,
   onRevert,
   testID,
 }: FileHeaderProps) {
@@ -159,10 +166,20 @@ function FileHeaderMenu({
   const reveal = useCallback(() => onReveal?.(file.path), [file.path, onReveal]);
   const download = useCallback(() => onDownload?.(file.path), [file.path, onDownload]);
   const duplicate = useCallback(() => onDuplicate?.(file.path), [file.path, onDuplicate]);
+  const stage = useCallback(
+    () => onStage?.(file.path, file.oldPath),
+    [file.oldPath, file.path, onStage],
+  );
+  const unstage = useCallback(
+    () => onUnstage?.(file.path, file.oldPath),
+    [file.oldPath, file.path, onUnstage],
+  );
   const revert = useCallback(
     () => onRevert?.(file.path, file.oldPath),
     [file.oldPath, file.path, onRevert],
   );
+  const canStage = Boolean(onStage && (!file.staged || file.unstaged));
+  const canUnstage = Boolean(onUnstage && file.staged);
   return (
     <FileActionsContextMenuContent
       fileKind="file"
@@ -176,9 +193,100 @@ function FileHeaderMenu({
       onDownload={onDownload ? download : undefined}
       onAddToChat={onAddToChat ? addToChat : undefined}
       onDuplicate={!file.isDeleted && onDuplicate ? duplicate : undefined}
+      onStage={canStage ? stage : undefined}
+      onUnstage={canUnstage ? unstage : undefined}
       onRevert={onRevert ? revert : undefined}
       testIDPrefix={testID}
     />
+  );
+}
+
+function FileHeaderStagedBadge({
+  file,
+  testID,
+}: {
+  file: ParsedDiffFile;
+  testID?: string;
+}) {
+  if (!file.staged) {
+    return null;
+  }
+  return (
+    <View style={styles.stagedBadge} testID={testID ? `${testID}-staged` : undefined}>
+      <Text style={styles.stagedBadgeText}>{file.unstaged ? "M•S" : "S"}</Text>
+    </View>
+  );
+}
+
+function FileHeaderQuickActions({
+  file,
+  interactive,
+  isHovered,
+  onStage,
+  onUnstage,
+  onRevert,
+  testID,
+}: {
+  file: ParsedDiffFile;
+  interactive: boolean;
+  isHovered: boolean;
+  onStage?: (path: string, oldPath?: string) => void;
+  onUnstage?: (path: string, oldPath?: string) => void;
+  onRevert?: (path: string, oldPath?: string) => void;
+  testID?: string;
+}) {
+  const canStage = Boolean(onStage && (!file.staged || file.unstaged));
+  const canUnstage = Boolean(onUnstage && file.staged);
+  const handleQuickStage = useCallback(() => {
+    onStage?.(file.path, file.oldPath);
+  }, [file.oldPath, file.path, onStage]);
+  const handleQuickUnstage = useCallback(() => {
+    onUnstage?.(file.path, file.oldPath);
+  }, [file.oldPath, file.path, onUnstage]);
+  const handleQuickRevert = useCallback(() => {
+    onRevert?.(file.path, file.oldPath);
+  }, [file.oldPath, file.path, onRevert]);
+
+  if (!interactive || !isHovered || (!canStage && !canUnstage && !onRevert)) {
+    return null;
+  }
+
+  return (
+    <View style={styles.quickActionsBar}>
+      {canStage ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Stage ${file.path}`}
+          onPress={handleQuickStage}
+          style={styles.quickActionButton}
+          testID={testID ? `${testID}-quick-stage` : undefined}
+        >
+          <Text style={styles.quickActionText}>+</Text>
+        </Pressable>
+      ) : null}
+      {canUnstage ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Unstage ${file.path}`}
+          onPress={handleQuickUnstage}
+          style={styles.quickActionButton}
+          testID={testID ? `${testID}-quick-unstage` : undefined}
+        >
+          <Text style={styles.quickActionText}>-</Text>
+        </Pressable>
+      ) : null}
+      {onRevert ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Discard ${file.path}`}
+          onPress={handleQuickRevert}
+          style={[styles.quickActionButton, styles.quickActionButtonDestructive]}
+          testID={testID ? `${testID}-quick-discard` : undefined}
+        >
+          <Text style={[styles.quickActionText, styles.quickActionTextDestructive]}>↶</Text>
+        </Pressable>
+      ) : null}
+    </View>
   );
 }
 
@@ -191,6 +299,8 @@ export const FileHeader = memo(function FileHeader({
   depth = 0,
   showDir = true,
   interactive = true,
+  checked,
+  onToggleCheck,
   onActivate,
   onSelect,
   onHeaderHeightChange,
@@ -249,6 +359,13 @@ export const FileHeader = memo(function FileHeader({
   );
   const fileName = fileNameForPath(file.path);
   const nameStyle = fileHeaderNameStyle(showsBodyState, hover.isHovered);
+  const vcsTreeTextColor = !showsBodyState
+    ? file.isNew
+      ? "#6aab73"
+      : file.isDeleted
+        ? "#f75464"
+        : "#6897bb"
+    : undefined;
   const changeIcon = <FileChangeIcon change={fileChange(file)} />;
   const content = (
     <View
@@ -256,12 +373,30 @@ export const FileHeader = memo(function FileHeader({
       testID={testID ? `${testID}-header-content` : undefined}
     >
       <View ref={dragSourceRef} style={showDir ? styles.left : [styles.left, styles.leftTree]}>
+        {onToggleCheck ? (
+          <Pressable
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: Boolean(checked) }}
+            onPress={(e) => {
+              e.stopPropagation?.();
+              onToggleCheck(file.path);
+            }}
+            style={[styles.checkboxBox, checked ? styles.checkboxBoxChecked : null]}
+            testID={testID ? `${testID}-checkbox` : undefined}
+          >
+            {checked ? <Text style={styles.checkboxMark}>✓</Text> : null}
+          </Pressable>
+        ) : null}
         {showDir ? null : (
           <View style={styles.icon}>
             <MaterialFileIcon fileName={fileName} size={WORKSPACE_TREE_ICON_SIZE} />
           </View>
         )}
-        <Text style={nameStyle} numberOfLines={1} testID={testID ? `${testID}-name` : undefined}>
+        <Text
+          style={[nameStyle, vcsTreeTextColor ? { color: vcsTreeTextColor } : null]}
+          numberOfLines={1}
+          testID={testID ? `${testID}-name` : undefined}
+        >
           {fileName}
         </Text>
         {showDir ? (
@@ -273,11 +408,16 @@ export const FileHeader = memo(function FileHeader({
         )}
       </View>
       <View style={styles.right}>
-        <DiffStat
-          additions={file.additions}
-          deletions={file.deletions}
-          testID={testID ? `${testID}-stat` : undefined}
-        />
+        {showsBodyState || !onToggleCheck ? (
+          <>
+            <FileHeaderStagedBadge file={file} testID={testID} />
+            <DiffStat
+              additions={file.additions}
+              deletions={file.deletions}
+              testID={testID ? `${testID}-stat` : undefined}
+            />
+          </>
+        ) : null}
         {changeIcon}
       </View>
     </View>
@@ -355,12 +495,21 @@ export const FileHeader = memo(function FileHeader({
           <FileHeaderMenu file={file} testID={testID} {...actions} bodyVisible={bodyVisible} />
         ) : null}
       </ContextMenu>
+      <FileHeaderQuickActions
+        file={file}
+        interactive={interactive}
+        isHovered={hover.isHovered}
+        onStage={actions.onStage}
+        onUnstage={actions.onUnstage}
+        onRevert={actions.onRevert}
+        testID={testID}
+      />
     </View>
   );
 });
 
 const styles = StyleSheet.create((theme) => ({
-  container: { width: "100%", overflow: "hidden", userSelect: "none" },
+  container: { width: "100%", overflow: "hidden", userSelect: "none", position: "relative" },
   documentContainer: {
     height: 30,
     backgroundColor: theme.colors.surface0,
@@ -416,12 +565,80 @@ const styles = StyleSheet.create((theme) => ({
     userSelect: "none",
   },
   leftTree: { gap: WORKSPACE_TREE_ICON_LABEL_GAP },
+  checkboxBox: {
+    width: 14,
+    height: 14,
+    borderRadius: 3,
+    borderWidth: 1,
+    borderColor: "#4e5157",
+    backgroundColor: theme.colors.surface1,
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  checkboxBoxChecked: {
+    backgroundColor: "#3574f0",
+    borderColor: "#3574f0",
+  },
+  checkboxMark: {
+    fontSize: 10,
+    fontWeight: theme.fontWeight.bold,
+    color: "#ffffff",
+    lineHeight: 11,
+  },
   right: {
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[2],
     flexShrink: 0,
     userSelect: "none",
+  },
+  stagedBadge: {
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 4,
+    backgroundColor: theme.colors.surface2,
+    borderWidth: theme.borderWidth[1],
+    borderColor: theme.colors.borderAccent,
+  },
+  stagedBadgeText: {
+    fontSize: 10,
+    fontWeight: theme.fontWeight.semibold,
+    color: theme.colors.foreground,
+  },
+  quickActionsBar: {
+    position: "absolute",
+    right: WORKSPACE_PANE_TRAILING_GLYPH_RAIL,
+    top: 0,
+    bottom: 0,
+    zIndex: 4,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+    paddingLeft: theme.spacing[1],
+    backgroundColor: theme.colors.surface1,
+  },
+  quickActionButton: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: theme.colors.surface2,
+    borderWidth: theme.borderWidth[1],
+    borderColor: theme.colors.border,
+  },
+  quickActionButtonDestructive: {
+    borderColor: theme.colors.border,
+  },
+  quickActionText: {
+    fontSize: 11,
+    fontWeight: theme.fontWeight.semibold,
+    color: theme.colors.foreground,
+    lineHeight: 13,
+  },
+  quickActionTextDestructive: {
+    color: theme.colors.destructive,
   },
   icon: {
     width: WORKSPACE_TREE_ICON_SIZE,

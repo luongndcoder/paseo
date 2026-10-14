@@ -43,6 +43,7 @@ export interface DiffTreeFolderRow {
   depth: number;
   additions: number;
   deletions: number;
+  fileCount?: number;
 }
 
 export interface DiffTreeFileRow {
@@ -103,6 +104,44 @@ export function buildDiffTree(files: ParsedDiffFile[]): DiffTreeDirNode {
   return root;
 }
 
+/**
+ * PyCharm "Group by Directory" flat directory tree:
+ * Groups modified files by their full parent directory path (depth 0 folder rows)
+ * with files directly inside at depth 1, eliminating deep staircase nesting.
+ */
+export function buildFlatDirectoryDiffTree(files: ParsedDiffFile[]): DiffTreeDirNode {
+  const hierarchicalRoot = buildDiffTree(files);
+  const root: DiffTreeDirNode = { kind: "dir", dirPath: "", name: "", children: [] };
+  const dirByPath = new Map<string, DiffTreeDirNode>();
+  const rootFiles: DiffTreeFileNode[] = [];
+
+  function collectOrderedFiles(node: DiffTreeDirNode): void {
+    for (const child of node.children) {
+      if (child.kind === "dir") {
+        collectOrderedFiles(child);
+      } else {
+        const parts = child.file.path.split("/");
+        const dirPath = parts.slice(0, -1).join("/");
+        if (!dirPath) {
+          rootFiles.push(child);
+        } else {
+          let group = dirByPath.get(dirPath);
+          if (!group) {
+            group = { kind: "dir", dirPath, name: dirPath, children: [] };
+            dirByPath.set(dirPath, group);
+            root.children.push(group);
+          }
+          group.children.push(child);
+        }
+      }
+    }
+  }
+
+  collectOrderedFiles(hierarchicalRoot);
+  root.children.push(...rootFiles);
+  return root;
+}
+
 // Collapse runs of single-child directories into one row, like VS Code / GitHub:
 // a directory whose only child is another directory absorbs it. The merged row
 // displays the joined segments ("packages/app/src") but keeps the DEEPEST
@@ -134,24 +173,27 @@ export function compressSingleChildChains(root: DiffTreeDirNode): DiffTreeDirNod
 interface DirStats {
   additions: number;
   deletions: number;
+  fileCount: number;
 }
 
-const EMPTY_DIR_STATS: DirStats = { additions: 0, deletions: 0 };
+const EMPTY_DIR_STATS: DirStats = { additions: 0, deletions: 0, fileCount: 0 };
 
 // Single post-order pass computing every directory node's aggregate stats from
 // its already-summed children — O(n), vs. re-walking each subtree per folder row.
 function computeDirStats(root: DiffTreeDirNode): Map<DiffTreeDirNode, DirStats> {
   const statsByNode = new Map<DiffTreeDirNode, DirStats>();
   function visit(node: DiffTreeDirNode): DirStats {
-    const stats: DirStats = { additions: 0, deletions: 0 };
+    const stats: DirStats = { additions: 0, deletions: 0, fileCount: 0 };
     for (const child of node.children) {
       if (child.kind === "file") {
         stats.additions += child.file.additions;
         stats.deletions += child.file.deletions;
+        stats.fileCount += 1;
       } else {
         const childStats = visit(child);
         stats.additions += childStats.additions;
         stats.deletions += childStats.deletions;
+        stats.fileCount += childStats.fileCount;
       }
     }
     statsByNode.set(node, stats);
@@ -187,6 +229,7 @@ export function flattenDiffTree(
         depth,
         additions: stats.additions,
         deletions: stats.deletions,
+        fileCount: stats.fileCount,
       });
       if (!collapsed.has(child.dirPath)) {
         walk(child, depth + 1);

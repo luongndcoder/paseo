@@ -1,6 +1,13 @@
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { floatingActionsClearance } from "@/components/ui/floating-action-button";
-import { useState, useCallback, useMemo, type ReactElement, type ReactNode } from "react";
+import {
+  useState,
+  useCallback,
+  useEffect,
+  useMemo,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { TreeRail } from "@/components/tree-rail";
@@ -15,22 +22,29 @@ import {
   type ViewStyle,
 } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import { useQueryClient } from "@tanstack/react-query";
+import { EditingTextInput } from "@/components/ui/text-input";
+import { useFetchQuery } from "@/data/query";
 import type { Theme } from "@/styles/theme";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import {
   AlignJustify,
+  Archive,
   ChevronDown,
   Columns2,
   ExternalLink,
+  GitGraph,
   ListChevronsDownUp,
   ListChevronsUpDown,
   Maximize,
   MoreHorizontal,
   Pilcrow,
   RotateCw,
+  Sparkles,
   WrapText,
 } from "lucide-react-native";
 import { type ParsedDiffFile } from "@/git/use-diff-query";
+import { invalidateCheckoutGitQueriesForClient } from "@/git/query-keys";
 import type { ChangesState } from "@/panels/changes/state";
 import { defaultChangesState } from "@/panels/changes/state";
 import { ReviewCommentSheet, ReviewFeedbackAction } from "@/review";
@@ -43,6 +57,7 @@ import {
   useCheckoutPrStatusQuery,
 } from "@/git/use-pr-status-query";
 import { CommitsSection } from "@/git/commits-section/commits-section";
+import { PyCharmGitModal } from "@/git/pycharm-git-window/pycharm-git-modal";
 import { useAppSettings } from "@/hooks/use-settings";
 import { useChangesPreferences } from "@/hooks/use-changes-preferences";
 import {
@@ -54,7 +69,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import * as Clipboard from "expo-clipboard";
 import { useFileDownload } from "@/hooks/use-file-download";
-import { useIsLocalDaemon } from "@/hooks/use-is-local-daemon";
+import { useIsLocalExecution } from "@/hooks/use-is-local-daemon";
 import { buildAbsoluteExplorerPath } from "@/utils/explorer-paths";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { GitActionsSplitButton } from "@/git/actions-split-button";
@@ -175,6 +190,54 @@ function useDiscardChangesAction({
     [discardPath],
   );
   return discardSupported && diffMode === "uncommitted" ? handleDiscardPath : undefined;
+}
+
+function useStageAndUnstageActions({
+  serverId,
+  cwd,
+  diffMode,
+}: {
+  serverId: string;
+  cwd: string;
+  diffMode: "uncommitted" | "base";
+}): {
+  onStagePath?: (path: string, oldPath?: string) => void;
+  onUnstagePath?: (path: string, oldPath?: string) => void;
+} {
+  const toast = useToast();
+  const stageChanges = useCheckoutGitActionsStore((state) => state.stageChanges);
+  const unstageChanges = useCheckoutGitActionsStore((state) => state.unstageChanges);
+  const handleStagePath = useCallback(
+    (path: string, oldPath?: string) => {
+      void stageChanges({
+        serverId,
+        cwd,
+        paths: oldPath ? [path, oldPath] : [path],
+      }).catch((cause) => {
+        toast.error(cause instanceof Error ? cause.message : "Failed to stage file");
+      });
+    },
+    [cwd, serverId, stageChanges, toast],
+  );
+  const handleUnstagePath = useCallback(
+    (path: string, oldPath?: string) => {
+      void unstageChanges({
+        serverId,
+        cwd,
+        paths: oldPath ? [path, oldPath] : [path],
+      }).catch((cause) => {
+        toast.error(cause instanceof Error ? cause.message : "Failed to unstage file");
+      });
+    },
+    [cwd, serverId, toast, unstageChanges],
+  );
+  if (diffMode !== "uncommitted") {
+    return {};
+  }
+  return {
+    onStagePath: handleStagePath,
+    onUnstagePath: handleUnstagePath,
+  };
 }
 
 interface ChangesSurfaceProps {
@@ -462,6 +525,7 @@ interface ChangesRepositoryToolbarModel {
   branchName: string | null;
   cwd: string;
   gitActions: GitActions | null;
+  onOpenGitLog?: () => void;
   pullRequest: ChangesPullRequestLinkModel | null;
   serverId: string;
   workspaceId?: string | null;
@@ -491,6 +555,7 @@ interface BuildChangesHeaderModelInput {
   diffMode: "uncommitted" | "base";
   gitActions: GitActions;
   mode: ChangesToolbarMode;
+  onOpenGitLog?: () => void;
   onOpenPullRequest: () => void;
   onSelectBase: () => void;
   onSelectUncommitted: () => void;
@@ -509,6 +574,7 @@ function buildChangesHeaderModel(input: BuildChangesHeaderModelInput): {
       branchName: input.branchName,
       cwd: input.cwd,
       gitActions: input.compact ? input.gitActions : null,
+      onOpenGitLog: input.onOpenGitLog,
       pullRequest: input.pullRequest
         ? { ...input.pullRequest, onOpen: input.onOpenPullRequest }
         : null,
@@ -615,6 +681,327 @@ function ChangesToolbarTrailing({ children }: { children: ReactNode }) {
   return <ToolbarControls style={styles.changesToolbarControls}>{children}</ToolbarControls>;
 }
 
+const StashToolbarIcon = withUnistyles(Archive, extraMutedIconColorMapping);
+const GitLogToolbarIcon = withUnistyles(GitGraph, extraMutedIconColorMapping);
+const SparklesIcon = withUnistyles(Sparkles, (theme: Theme) => ({
+  color: theme.colors.foreground,
+}));
+
+interface StashEntry {
+  index: number;
+  branch: string;
+  message: string;
+}
+
+function StashEntryRow({
+  entry,
+  isBusy,
+  onApplyOrPop,
+  onDrop,
+}: {
+  entry: StashEntry;
+  isBusy: boolean;
+  onApplyOrPop: (index: number, drop: boolean) => Promise<void>;
+  onDrop: (index: number) => Promise<void>;
+}) {
+  const handleApply = useCallback(() => {
+    void onApplyOrPop(entry.index, false);
+  }, [entry.index, onApplyOrPop]);
+  const handlePop = useCallback(() => {
+    void onApplyOrPop(entry.index, true);
+  }, [entry.index, onApplyOrPop]);
+  const handleDrop = useCallback(() => {
+    void onDrop(entry.index);
+  }, [entry.index, onDrop]);
+
+  return (
+    <View style={styles.stashEntryRow} testID={`changes-stash-entry-${entry.index}`}>
+      <View style={styles.stashEntryInfo}>
+        <Text style={styles.stashEntryTitle} numberOfLines={1}>
+          #{entry.index} {entry.message || entry.branch || "WIP"}
+        </Text>
+        {entry.branch ? (
+          <Text style={styles.stashEntrySubtitle} numberOfLines={1}>
+            {entry.branch}
+          </Text>
+        ) : null}
+      </View>
+      <View style={styles.stashEntryActions}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Apply stash ${entry.index}`}
+          disabled={isBusy}
+          onPress={handleApply}
+          style={styles.stashActionPill}
+          testID={`changes-stash-apply-${entry.index}`}
+        >
+          <Text style={styles.stashActionPillText}>Apply</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Pop stash ${entry.index}`}
+          disabled={isBusy}
+          onPress={handlePop}
+          style={styles.stashActionPill}
+          testID={`changes-stash-pop-${entry.index}`}
+        >
+          <Text style={styles.stashActionPillText}>Pop</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Drop stash ${entry.index}`}
+          disabled={isBusy}
+          onPress={handleDrop}
+          style={[styles.stashActionPill, styles.stashActionPillDestructive]}
+          testID={`changes-stash-drop-${entry.index}`}
+        >
+          <Text style={[styles.stashActionPillText, styles.stashActionTextDestructive]}>Drop</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function StashEntriesList({
+  isLoading,
+  entries,
+  isBusy,
+  onApplyOrPop,
+  onDrop,
+}: {
+  isLoading: boolean;
+  entries: StashEntry[];
+  isBusy: boolean;
+  onApplyOrPop: (index: number, drop: boolean) => Promise<void>;
+  onDrop: (index: number) => Promise<void>;
+}) {
+  if (isLoading) {
+    return (
+      <View style={styles.stashEmptyRow}>
+        <ThemedLoadingSpinner size="small" uniProps={foregroundMutedIconColorMapping} />
+      </View>
+    );
+  }
+  if (entries.length === 0) {
+    return (
+      <View style={styles.stashEmptyRow}>
+        <Text style={styles.stashEmptyText}>No stashes saved</Text>
+      </View>
+    );
+  }
+  return (
+    <>
+      {entries.map((entry) => (
+        <StashEntryRow
+          key={`stash-${entry.index}`}
+          entry={entry}
+          isBusy={isBusy}
+          onApplyOrPop={onApplyOrPop}
+          onDrop={onDrop}
+        />
+      ))}
+    </>
+  );
+}
+
+function ChangesStashMenu({ model }: { model: ChangesRepositoryToolbarModel }) {
+  const [open, setOpen] = useState(false);
+  const [stashMessage, setStashMessage] = useState("");
+  const [isBusy, setIsBusy] = useState(false);
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const client = useSessionStore((state) => state.sessions[model.serverId]?.client ?? null);
+  const stashQueryKey = useMemo(
+    () => ["stashList", model.serverId, model.workspaceId ?? model.cwd, "all"] as const,
+    [model.cwd, model.serverId, model.workspaceId],
+  );
+  const stashListQuery = useFetchQuery({
+    queryKey: stashQueryKey,
+    dataShape: "list",
+    staleTimeMs: 5_000,
+    enabled: open && Boolean(client),
+    queryFn: async () => {
+      if (!client) {
+        return { entries: [] };
+      }
+      return await client.stashList(model.cwd, { paseoOnly: false });
+    },
+  });
+  const entries = stashListQuery.data?.entries ?? [];
+  const refreshAfterStashAction = useCallback(async () => {
+    await queryClient.invalidateQueries({ queryKey: stashQueryKey });
+    await invalidateCheckoutGitQueriesForClient(queryClient, {
+      serverId: model.serverId,
+      cwd: model.cwd,
+    });
+  }, [model.cwd, model.serverId, queryClient, stashQueryKey]);
+
+  const handleSaveStash = useCallback(async () => {
+    if (!client || isBusy) {
+      return;
+    }
+    const label = stashMessage.trim() || `WIP on ${model.branchName || "current branch"}`;
+    const confirmed = await confirmDialog({
+      title: "Stash Uncommitted Changes?",
+      message: `Save uncommitted working tree changes to a new stash entry (${label}) and revert the working directory to HEAD?`,
+      confirmLabel: "Stash Changes",
+      cancelLabel: "Cancel",
+    });
+    if (!confirmed) {
+      return;
+    }
+    setIsBusy(true);
+    try {
+      const response = await client.stashSave(model.cwd, {
+        message: stashMessage.trim() || undefined,
+        branch: model.branchName ?? undefined,
+      });
+      if (!response.success) {
+        toast.error(response.error?.message ?? "Nothing to stash");
+        return;
+      }
+      setStashMessage("");
+      await refreshAfterStashAction();
+      toast.show("Saved changes to stash", { variant: "success" });
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "Failed to save stash");
+    } finally {
+      setIsBusy(false);
+    }
+  }, [client, isBusy, model.branchName, model.cwd, refreshAfterStashAction, stashMessage, toast]);
+
+  const handlePopOrApplyStash = useCallback(
+    async (index: number, drop: boolean) => {
+      if (!client || isBusy) {
+        return;
+      }
+      const confirmed = await confirmDialog({
+        title: drop ? `Pop stash@{${index}}?` : `Apply stash@{${index}}?`,
+        message: drop
+          ? `Apply stash@{${index}} to your working tree and remove it from the stash list?`
+          : `Apply stash@{${index}} to your working tree and keep it in the stash list?`,
+        confirmLabel: drop ? "Pop Stash" : "Apply Stash",
+        cancelLabel: "Cancel",
+      });
+      if (!confirmed) {
+        return;
+      }
+      setIsBusy(true);
+      try {
+        const response = await client.stashPop(model.cwd, index, undefined, {
+          action: drop ? "pop" : "apply",
+        });
+        if (!response.success) {
+          toast.error(response.error?.message ?? "Failed to restore stash");
+          return;
+        }
+        await refreshAfterStashAction();
+        toast.show(drop ? "Popped stash" : "Applied stash", { variant: "success" });
+      } catch (cause) {
+        toast.error(cause instanceof Error ? cause.message : "Failed to restore stash");
+      } finally {
+        setIsBusy(false);
+      }
+    },
+    [client, isBusy, model.cwd, refreshAfterStashAction, toast],
+  );
+
+  const handleDropStash = useCallback(
+    async (index: number) => {
+      if (!client || isBusy) {
+        return;
+      }
+      const confirmed = await confirmDialog({
+        title: `Drop stash@{${index}}?`,
+        message: `Permanently delete stash@{${index}}? This action cannot be undone.`,
+        confirmLabel: "Drop Stash",
+        cancelLabel: "Cancel",
+        destructive: true,
+      });
+      if (!confirmed) {
+        return;
+      }
+      setIsBusy(true);
+      try {
+        const response = await client.stashPop(model.cwd, index, undefined, { action: "drop" });
+        if (!response.success) {
+          toast.error(response.error?.message ?? "Failed to drop stash");
+          return;
+        }
+        await refreshAfterStashAction();
+        toast.show("Dropped stash", { variant: "success" });
+      } catch (cause) {
+        toast.error(cause instanceof Error ? cause.message : "Failed to drop stash");
+      } finally {
+        setIsBusy(false);
+      }
+    },
+    [client, isBusy, model.cwd, refreshAfterStashAction, toast],
+  );
+
+  if (!client) {
+    return null;
+  }
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger
+        testID="changes-stash-menu-trigger"
+        accessibilityRole="button"
+        accessibilityLabel="Git Stash"
+        style={toolbarLabelTriggerStyle}
+      >
+        {(state) => {
+          const highlighted = isToolbarLabelTriggerHighlighted(state);
+          return (
+            <>
+              <ToolbarLabelTriggerIcon>
+                <StashToolbarIcon size={14} strokeWidth={1.5} />
+              </ToolbarLabelTriggerIcon>
+              <Text style={toolbarLabelTriggerTextStyle(highlighted)}>
+                {entries.length > 0 ? `Stash (${entries.length})` : "Stash"}
+              </Text>
+            </>
+          );
+        }}
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <View style={styles.stashMenuContent}>
+          <View style={styles.stashComposerRow}>
+            <EditingTextInput
+              value={stashMessage}
+              onChangeText={setStashMessage}
+              placeholder="Stash message (optional)..."
+              placeholderTextColor="#888"
+              style={styles.stashInput}
+              editable={!isBusy}
+              testID="changes-stash-message-input"
+            />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Save stash"
+              disabled={isBusy}
+              onPress={handleSaveStash}
+              style={[styles.stashSaveButton, isBusy ? styles.buttonDisabled : null]}
+              testID="changes-stash-save-button"
+            >
+              <Text style={styles.stashSaveButtonText}>Stash</Text>
+            </Pressable>
+          </View>
+          <DropdownMenuSeparator />
+          <StashEntriesList
+            isLoading={stashListQuery.isLoading}
+            entries={entries}
+            isBusy={isBusy}
+            onApplyOrPop={handlePopOrApplyStash}
+            onDrop={handleDropStash}
+          />
+        </View>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function ChangesRepositoryToolbar({
   compact,
   model,
@@ -648,6 +1035,28 @@ function ChangesRepositoryToolbar({
             <ChangesPullRequestExternalLink compact={compact} model={model.pullRequest} />
           </>
         ) : null}
+        {model.onOpenGitLog ? (
+          <Pressable
+            testID="changes-open-git-log-button"
+            accessibilityRole="button"
+            accessibilityLabel="Open PyCharm Git Log (Cmd+9)"
+            onPress={model.onOpenGitLog}
+            style={toolbarLabelTriggerStyle}
+          >
+            {(state) => {
+              const highlighted = isToolbarLabelTriggerHighlighted(state);
+              return (
+                <>
+                  <ToolbarLabelTriggerIcon>
+                    <GitLogToolbarIcon size={14} strokeWidth={1.5} />
+                  </ToolbarLabelTriggerIcon>
+                  <Text style={toolbarLabelTriggerTextStyle(highlighted)}>Git Log</Text>
+                </>
+              );
+            }}
+          </Pressable>
+        ) : null}
+        <ChangesStashMenu model={model} />
         {model.gitActions ? <GitActionsSplitButton gitActions={model.gitActions} menuOnly /> : null}
       </ChangesToolbarTrailing>
     </ChangesToolbarRow>
@@ -1278,6 +1687,9 @@ function ChangesTreeRail({
   onTreeWidthChange,
   collapsedFolderPaths,
   onCollapsedFolderPathsChange,
+  checkedPaths,
+  onToggleFileCheck,
+  onToggleFolderCheck,
 }: {
   shown: boolean;
   children: ReactElement;
@@ -1288,6 +1700,9 @@ function ChangesTreeRail({
   onTreeWidthChange: (width: number) => void;
   collapsedFolderPaths: string[];
   onCollapsedFolderPathsChange: (paths: string[]) => void;
+  checkedPaths?: Set<string>;
+  onToggleFileCheck?: (path: string) => void;
+  onToggleFolderCheck?: (dirPath: string) => void;
 }) {
   if (!shown) return children;
   return (
@@ -1299,6 +1714,9 @@ function ChangesTreeRail({
         onSelectFile={onSelectFile}
         collapsedFolderPaths={collapsedFolderPaths}
         onCollapsedFolderPathsChange={onCollapsedFolderPathsChange}
+        checkedPaths={checkedPaths}
+        onToggleFileCheck={onToggleFileCheck}
+        onToggleFolderCheck={onToggleFolderCheck}
       />
     </TreeRail>
   );
@@ -1316,6 +1734,9 @@ function ChangesBody({
   onTreeWidthChange,
   collapsedFolderPaths,
   onCollapsedFolderPathsChange,
+  checkedPaths,
+  onToggleFileCheck,
+  onToggleFolderCheck,
 }: {
   presentation: ChangesPresentation;
   children: ReactElement;
@@ -1328,6 +1749,9 @@ function ChangesBody({
   onTreeWidthChange: (width: number) => void;
   collapsedFolderPaths: string[];
   onCollapsedFolderPathsChange: (paths: string[]) => void;
+  checkedPaths?: Set<string>;
+  onToggleFileCheck?: (path: string) => void;
+  onToggleFolderCheck?: (dirPath: string) => void;
 }) {
   if (presentation === "tree") {
     if (files.length === 0) return children;
@@ -1338,6 +1762,9 @@ function ChangesBody({
         onSelectFile={onSelectFile}
         collapsedFolderPaths={collapsedFolderPaths}
         onCollapsedFolderPathsChange={onCollapsedFolderPathsChange}
+        checkedPaths={checkedPaths}
+        onToggleFileCheck={onToggleFileCheck}
+        onToggleFolderCheck={onToggleFolderCheck}
       />
     );
   }
@@ -1352,6 +1779,9 @@ function ChangesBody({
       onTreeWidthChange={onTreeWidthChange}
       collapsedFolderPaths={collapsedFolderPaths}
       onCollapsedFolderPathsChange={onCollapsedFolderPathsChange}
+      checkedPaths={checkedPaths}
+      onToggleFileCheck={onToggleFileCheck}
+      onToggleFolderCheck={onToggleFolderCheck}
     >
       {children}
     </ChangesTreeRail>
@@ -1365,6 +1795,7 @@ function ChangesCommits({
   collapsed,
   onCommitPress,
   onCollapsedChange,
+  onOpenGitLog,
 }: {
   presentation: ChangesPresentation;
   serverId: string;
@@ -1372,6 +1803,7 @@ function ChangesCommits({
   collapsed: boolean;
   onCommitPress: (sha: string) => void;
   onCollapsedChange: (collapsed: boolean) => void;
+  onOpenGitLog?: () => void;
 }) {
   if (presentation === "diff") return null;
   return (
@@ -1381,6 +1813,7 @@ function ChangesCommits({
       onCommitPress={onCommitPress}
       collapsed={collapsed}
       onCollapsedChange={onCollapsedChange}
+      onOpenGitLog={onOpenGitLog}
     />
   );
 }
@@ -1496,7 +1929,7 @@ export function ChangesSurface({
   const codeFontSize = appSettings.codeFontSize;
 
   const toast = useToast();
-  const isLocalDaemon = useIsLocalDaemon(serverId);
+  const isLocalDaemon = useIsLocalExecution(serverId);
   const { targets: desktopOpenTargets } = useDesktopOpenTargets({
     isLocalExecution: isLocalDaemon,
   });
@@ -1670,6 +2103,7 @@ export function ChangesSurface({
     [client, cwd, t, toast],
   );
   const onRevertPath = useDiscardChangesAction({ serverId, cwd, diffMode });
+  const { onStagePath, onUnstagePath } = useStageAndUnstageActions({ serverId, cwd, diffMode });
   const [localFocusRequest, setLocalFocusRequest] = useState<{
     path: string;
     revision: number;
@@ -1678,11 +2112,7 @@ export function ChangesSurface({
     () => (focusPath ? { path: focusPath, revision: focusRequestId ?? 0 } : null),
     [focusPath, focusRequestId],
   );
-  const documentFocusRequest =
-    localFocusRequest &&
-    (!externalFocusRequest || localFocusRequest.revision >= externalFocusRequest.revision)
-      ? localFocusRequest
-      : externalFocusRequest;
+  const documentFocusRequest = resolveDocumentFocusRequest(localFocusRequest, externalFocusRequest);
   const handleSelectTreeFile = useCallback(
     (path: string) => {
       if (presentation === "tree" && onSelectDiffFile) {
@@ -1712,6 +2142,8 @@ export function ChangesSurface({
       revealTargetName: fileManagerTarget?.label,
       onDownload: handleDownloadPath,
       onDuplicate: fsEntryDuplicateEnabled ? handleDuplicatePath : undefined,
+      onStage: onStagePath,
+      onUnstage: onUnstagePath,
       onRevert: onRevertPath,
     }),
     [
@@ -1730,6 +2162,8 @@ export function ChangesSurface({
       handleRevealPath,
       fileManagerTarget,
       fsEntryDuplicateEnabled,
+      onStagePath,
+      onUnstagePath,
       onRevertPath,
     ],
   );
@@ -1820,6 +2254,68 @@ export function ChangesSurface({
       />
     </View>
   );
+  const [gitLogModalOpen, setGitLogModalOpen] = useState(false);
+  const handleOpenGitLog = useCallback(() => setGitLogModalOpen(true), []);
+  const handleCloseGitLog = useCallback(() => setGitLogModalOpen(false), []);
+
+  useEffect(() => {
+    if (!isWeb || !isGit) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "9") {
+        event.preventDefault();
+        setGitLogModalOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isGit]);
+
+  const [uncheckedPaths, setUncheckedPaths] = useState<Set<string>>(() => new Set());
+  const checkedPaths = useMemo(
+    () => new Set(files.map((f) => f.path).filter((p) => !uncheckedPaths.has(p))),
+    [files, uncheckedPaths],
+  );
+  const handleToggleFileCheck = useCallback((path: string) => {
+    setUncheckedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return next;
+    });
+  }, []);
+  const handleToggleFolderCheck = useCallback(
+    (dirPath: string) => {
+      const prefix = `${dirPath}/`;
+      const directMatches = files
+        .filter((f) => f.path.split("/").slice(0, -1).join("/") === dirPath)
+        .map((f) => f.path);
+      const folderFilePaths =
+        directMatches.length > 0
+          ? directMatches
+          : files.filter((f) => f.path.startsWith(prefix)).map((f) => f.path);
+      setUncheckedPaths((prev) => {
+        const next = new Set(prev);
+        const allChecked = folderFilePaths.every((p) => !next.has(p));
+        if (allChecked) {
+          for (const p of folderFilePaths) {
+            next.add(p);
+          }
+        } else {
+          for (const p of folderFilePaths) {
+            next.delete(p);
+          }
+        }
+        return next;
+      });
+    },
+    [files],
+  );
+
   const bodyContent = (
     <ChangesBody
       presentation={presentation}
@@ -1832,6 +2328,9 @@ export function ChangesSurface({
       onTreeWidthChange={handleChangesTreeWidth}
       collapsedFolderPaths={instanceState.collapsedFolderPaths}
       onCollapsedFolderPathsChange={updateCollapsedFolderPaths}
+      checkedPaths={diffMode === "uncommitted" ? checkedPaths : undefined}
+      onToggleFileCheck={diffMode === "uncommitted" ? handleToggleFileCheck : undefined}
+      onToggleFolderCheck={diffMode === "uncommitted" ? handleToggleFolderCheck : undefined}
     >
       {diffContent}
     </ChangesBody>
@@ -1896,6 +2395,7 @@ export function ChangesSurface({
         diffMode,
         gitActions,
         mode: toolbarMode,
+        onOpenGitLog: handleOpenGitLog,
         onOpenPullRequest: handleOpenPullRequest,
         onSelectBase: handleSelectBase,
         onSelectUncommitted: handleSelectUncommitted,
@@ -1910,6 +2410,7 @@ export function ChangesSurface({
       cwd,
       diffMode,
       gitActions,
+      handleOpenGitLog,
       handleOpenPullRequest,
       handleSelectBase,
       handleSelectUncommitted,
@@ -1922,6 +2423,7 @@ export function ChangesSurface({
       workspaceId,
     ],
   );
+  const showCommitComposer = shouldRenderCommitComposer(isGit, diffMode, hasChanges);
 
   return (
     <View
@@ -1936,6 +2438,15 @@ export function ChangesSurface({
           repository={changesHeaderModel.repository}
           comparison={changesHeaderModel.comparison}
           sidebarSurface={presentation === "tree"}
+        />
+      ) : null}
+
+      {showCommitComposer ? (
+        <ChangesCommitComposer
+          serverId={serverId}
+          cwd={cwd}
+          files={files}
+          checkedPaths={checkedPaths}
         />
       ) : null}
 
@@ -1968,7 +2479,362 @@ export function ChangesSurface({
         onCommitPress={handleCommitPress}
         collapsed={instanceState.commitsCollapsed}
         onCollapsedChange={handleCommitsCollapsedChange}
+        onOpenGitLog={handleOpenGitLog}
       />
+
+      {isGit ? (
+        <PyCharmGitModal
+          visible={gitLogModalOpen}
+          onClose={handleCloseGitLog}
+          serverId={serverId}
+          cwd={cwd}
+          onOpenCommitTab={handleCommitPress}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+function resolveDocumentFocusRequest(
+  localFocusRequest: { path: string; revision: number } | null,
+  externalFocusRequest: { path: string; revision: number } | null,
+) {
+  if (!localFocusRequest) {
+    return externalFocusRequest;
+  }
+  if (!externalFocusRequest || localFocusRequest.revision >= externalFocusRequest.revision) {
+    return localFocusRequest;
+  }
+  return externalFocusRequest;
+}
+
+function shouldRenderCommitComposer(
+  isGit: boolean,
+  diffMode: WorkingDiffMode,
+  hasChanges: boolean,
+): boolean {
+  return isGit && diffMode === "uncommitted" && hasChanges;
+}
+
+function resolveCommitButtonLabel(
+  isCommitting: boolean,
+  stagedCount: number,
+  checkedCount: number,
+  totalCount: number,
+  amend: boolean,
+): string {
+  if (isCommitting) {
+    return "Committing...";
+  }
+  const prefix = amend ? "Amend" : "Commit";
+  if (stagedCount > 0) {
+    return `${prefix} Staged (${stagedCount})`;
+  }
+  if (checkedCount < totalCount) {
+    return `${prefix} Checked (${checkedCount})`;
+  }
+  return `${prefix} All (${totalCount})`;
+}
+
+function resolveErrorMessage(cause: unknown, fallback: string): string {
+  return cause instanceof Error ? cause.message : fallback;
+}
+
+function ChangesCommitComposer({
+  serverId,
+  cwd,
+  files,
+  checkedPaths,
+}: {
+  serverId: string;
+  cwd: string;
+  files: ParsedDiffFile[];
+  checkedPaths?: Set<string>;
+}) {
+  const [commitMessage, setCommitMessage] = useState("");
+  const [amend, setAmend] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isStaging, setIsStaging] = useState(false);
+  const toast = useToast();
+  const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
+  const commit = useCheckoutGitActionsStore((state) => state.commit);
+  const stageChanges = useCheckoutGitActionsStore((state) => state.stageChanges);
+  const unstageChanges = useCheckoutGitActionsStore((state) => state.unstageChanges);
+  const isCommitting =
+    useCheckoutGitActionsStore((state) => state.getStatus({ serverId, cwd, actionId: "commit" })) ===
+    "pending";
+
+  const stagedCount = useMemo(() => files.filter((file) => file.staged).length, [files]);
+  const unstagedCount = useMemo(
+    () => files.filter((file) => !file.staged || file.unstaged).length,
+    [files],
+  );
+  const checkedCount = checkedPaths ? checkedPaths.size : files.length;
+
+  const handleGenerateMessage = useCallback(() => {
+    if (!client || isGenerating || isCommitting) {
+      return;
+    }
+    setIsGenerating(true);
+    void client
+      .checkoutGenerateCommitMessage(cwd)
+      .then((response) => {
+        if (!response.success || !response.generatedMessage) {
+          toast.error(response.error?.message ?? "Could not generate commit message");
+          return;
+        }
+        setCommitMessage(response.generatedMessage);
+        return;
+      })
+      .catch((cause: unknown) => {
+        toast.error(resolveErrorMessage(cause, "Failed to generate commit message"));
+      })
+      .finally(() => {
+        setIsGenerating(false);
+      });
+  }, [client, cwd, isCommitting, isGenerating, toast]);
+
+  const handleStageAll = useCallback(() => {
+    if (isStaging || isCommitting || unstagedCount === 0) {
+      return;
+    }
+    setIsStaging(true);
+    void stageChanges({ serverId, cwd, all: true })
+      .catch((cause: unknown) => {
+        toast.error(resolveErrorMessage(cause, "Failed to stage all files"));
+      })
+      .finally(() => {
+        setIsStaging(false);
+      });
+  }, [cwd, isCommitting, isStaging, serverId, stageChanges, toast, unstagedCount]);
+
+  const handleUnstageAll = useCallback(async () => {
+    if (isStaging || isCommitting || stagedCount === 0) {
+      return;
+    }
+    const confirmed = await confirmDialog({
+      title: "Unstage All Files",
+      message: `Unstage all ${stagedCount} staged file(s) from the index?`,
+      confirmLabel: "Unstage All",
+      cancelLabel: "Cancel",
+    });
+    if (!confirmed) {
+      return;
+    }
+    setIsStaging(true);
+    void unstageChanges({ serverId, cwd, all: true })
+      .catch((cause: unknown) => {
+        toast.error(resolveErrorMessage(cause, "Failed to unstage all files"));
+      })
+      .finally(() => {
+        setIsStaging(false);
+      });
+  }, [cwd, isCommitting, isStaging, serverId, stagedCount, toast, unstageChanges]);
+
+  const executeCommit = useCallback(
+    async (pushAfterCommit: boolean) => {
+      if (isCommitting || isGenerating) {
+        return;
+      }
+      if (stagedCount === 0 && checkedCount === 0 && !amend) {
+        toast.error("Select at least one file to commit");
+        return;
+      }
+      const targetFilesCount = stagedCount > 0 ? stagedCount : checkedCount;
+      if (pushAfterCommit || amend) {
+        const confirmed = await confirmDialog({
+          title: pushAfterCommit
+            ? amend
+              ? "Amend Commit & Push"
+              : "Commit & Push to Remote"
+            : "Amend Previous Commit",
+          message: pushAfterCommit
+            ? `Commit ${targetFilesCount} file(s)${amend ? " (amending HEAD)" : ""} and push immediately to the remote branch?`
+            : `Rewrite the latest commit (HEAD) with ${targetFilesCount} selected file(s)?`,
+          confirmLabel: pushAfterCommit ? "Commit & Push" : "Amend Commit",
+          cancelLabel: "Cancel",
+          destructive: amend,
+        });
+        if (!confirmed) {
+          return;
+        }
+      }
+      const trimmedMessage = commitMessage.trim();
+      try {
+        let shouldAddAll = stagedCount === 0;
+        if (stagedCount === 0 && checkedPaths && checkedPaths.size < files.length) {
+          shouldAddAll = false;
+          if (checkedPaths.size > 0) {
+            await stageChanges({
+              serverId,
+              cwd,
+              paths: Array.from(checkedPaths),
+            });
+          }
+        }
+        await commit({
+          serverId,
+          cwd,
+          message: trimmedMessage || undefined,
+          addAll: shouldAddAll,
+          amend,
+          push: pushAfterCommit,
+        });
+        setCommitMessage("");
+        setAmend(false);
+        toast.show(
+          pushAfterCommit ? "Committed & pushed successfully" : "Committed changes",
+          { variant: "success" },
+        );
+      } catch (cause) {
+        toast.error(resolveErrorMessage(cause, "Failed to commit changes"));
+      }
+    },
+    [
+      amend,
+      checkedCount,
+      checkedPaths,
+      commit,
+      commitMessage,
+      cwd,
+      files.length,
+      isCommitting,
+      isGenerating,
+      serverId,
+      stageChanges,
+      stagedCount,
+      toast,
+    ],
+  );
+
+  const handleCommit = useCallback(() => {
+    void executeCommit(false);
+  }, [executeCommit]);
+
+  const handleCommitAndPush = useCallback(() => {
+    void executeCommit(true);
+  }, [executeCommit]);
+
+  const commitButtonLabel = resolveCommitButtonLabel(
+    isCommitting,
+    stagedCount,
+    checkedCount,
+    files.length,
+    amend,
+  );
+  const generateDisabled = !client || isGenerating || isCommitting;
+  const stageAllDisabled = unstagedCount === 0 || isStaging || isCommitting;
+  const unstageAllDisabled = stagedCount === 0 || isStaging || isCommitting;
+  const commitDisabled =
+    isCommitting || isGenerating || (stagedCount === 0 && checkedCount === 0 && !amend);
+
+  return (
+    <View style={styles.commitComposer} testID="changes-commit-composer">
+      <View style={styles.commitInputRow}>
+        <EditingTextInput
+          value={commitMessage}
+          onChangeText={setCommitMessage}
+          placeholder="Commit message (leave empty to auto-generate)..."
+          placeholderTextColor="#888"
+          editable={!commitDisabled}
+          style={styles.commitInput}
+          testID="changes-commit-message-input"
+        />
+        <Tooltip delayDuration={300} enabledOnDesktop enabledOnMobile={false}>
+          <TooltipTrigger
+            accessibilityRole="button"
+            accessibilityLabel="Generate commit message with AI"
+            disabled={generateDisabled}
+            onPress={handleGenerateMessage}
+            style={[styles.aiGenerateButton, generateDisabled ? styles.buttonDisabled : null]}
+            testID="changes-ai-generate-commit-message"
+          >
+            {isGenerating ? (
+              <ThemedLoadingSpinner size="small" uniProps={foregroundMutedIconColorMapping} />
+            ) : (
+              <SparklesIcon size={13} strokeWidth={1.75} />
+            )}
+            <Text style={styles.aiGenerateButtonText}>AI</Text>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            <Text style={styles.tooltipText}>Auto-generate commit message with AI</Text>
+          </TooltipContent>
+        </Tooltip>
+      </View>
+      <View style={styles.commitActionsRow}>
+        <View style={styles.stageControlsGroup}>
+          <Text style={styles.stageSummaryText}>
+            {checkedCount}/{files.length} selected
+            {stagedCount > 0 ? ` · ${stagedCount} staged` : ""}
+          </Text>
+          <Pressable
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: amend }}
+            accessibilityLabel="Amend previous commit"
+            onPress={() => setAmend((prev) => !prev)}
+            style={[styles.stageActionPill, amend ? styles.stageActionPillActive : null]}
+            testID="changes-amend-checkbox"
+          >
+            <Text
+              style={[
+                styles.stageActionPillText,
+                amend ? styles.stageActionPillTextActive : null,
+              ]}
+            >
+              {amend ? "✓ Amend" : "Amend"}
+            </Text>
+          </Pressable>
+          {unstagedCount > 0 ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Stage all changes"
+              disabled={stageAllDisabled}
+              onPress={handleStageAll}
+              style={[styles.stageActionPill, stageAllDisabled ? styles.buttonDisabled : null]}
+              testID="changes-stage-all-button"
+            >
+              <Text style={styles.stageActionPillText}>+ Stage</Text>
+            </Pressable>
+          ) : null}
+          {stagedCount > 0 ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Unstage all changes"
+              disabled={unstageAllDisabled}
+              onPress={() => void handleUnstageAll()}
+              style={[styles.stageActionPill, unstageAllDisabled ? styles.buttonDisabled : null]}
+              testID="changes-unstage-all-button"
+            >
+              <Text style={styles.stageActionPillText}>- Unstage</Text>
+            </Pressable>
+          ) : null}
+        </View>
+        <View style={styles.commitSubmitGroup}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={commitButtonLabel}
+            disabled={commitDisabled}
+            onPress={handleCommit}
+            style={[styles.commitSubmitButton, commitDisabled ? styles.buttonDisabled : null]}
+            testID="changes-commit-submit-button"
+          >
+            {isCommitting ? (
+              <ThemedLoadingSpinner size="small" uniProps={foregroundMutedIconColorMapping} />
+            ) : null}
+            <Text style={styles.commitSubmitButtonText}>{commitButtonLabel}</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Commit and Push"
+            disabled={commitDisabled}
+            onPress={handleCommitAndPush}
+            style={[styles.commitAndPushButton, commitDisabled ? styles.buttonDisabled : null]}
+            testID="changes-commit-and-push-button"
+          >
+            <Text style={styles.commitAndPushButtonText}>Commit & Push ↑</Text>
+          </Pressable>
+        </View>
+      </View>
     </View>
   );
 }
@@ -1999,6 +2865,229 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     justifyContent: "flex-end",
     flexShrink: 0,
+  },
+  commitComposer: {
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[2],
+    gap: theme.spacing[2],
+    borderBottomWidth: theme.borderWidth[1],
+    borderBottomColor: theme.colors.border,
+    backgroundColor: theme.colors.surface0,
+  },
+  commitInputRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+  },
+  commitInput: {
+    flex: 1,
+    minWidth: 0,
+    height: 28,
+    paddingHorizontal: theme.spacing[2],
+    borderRadius: theme.borderRadius.md,
+    borderWidth: theme.borderWidth[1],
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface1,
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
+  },
+  aiGenerateButton: {
+    height: 28,
+    paddingHorizontal: theme.spacing[2],
+    borderRadius: theme.borderRadius.md,
+    borderWidth: theme.borderWidth[1],
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  aiGenerateButtonText: {
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.semibold,
+    color: theme.colors.foreground,
+  },
+  commitActionsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: theme.spacing[2],
+    flexWrap: "wrap",
+  },
+  stageControlsGroup: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[1],
+    flexWrap: "wrap",
+  },
+  stageSummaryText: {
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.foregroundMuted,
+    marginRight: 2,
+  },
+  stageActionPill: {
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: theme.borderRadius.sm,
+    borderWidth: theme.borderWidth[1],
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface1,
+  },
+  stageActionPillActive: {
+    borderColor: "#3b82f6",
+    backgroundColor: "rgba(59, 130, 246, 0.14)",
+  },
+  stageActionPillText: {
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.foreground,
+  },
+  stageActionPillTextActive: {
+    color: "#3b82f6",
+    fontWeight: theme.fontWeight.semibold,
+  },
+  commitSubmitGroup: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[1],
+    flexWrap: "wrap",
+  },
+  gitToolWindowButton: {
+    height: 26,
+    paddingHorizontal: theme.spacing[2],
+    borderRadius: theme.borderRadius.md,
+    borderWidth: theme.borderWidth[1],
+    borderColor: "#10b981",
+    backgroundColor: "rgba(16, 185, 129, 0.12)",
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  gitToolWindowButtonText: {
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.semibold,
+    color: "#10b981",
+  },
+  commitSubmitButton: {
+    height: 26,
+    paddingHorizontal: theme.spacing[3],
+    borderRadius: theme.borderRadius.md,
+    backgroundColor: theme.colors.foreground,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  commitSubmitButtonText: {
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.semibold,
+    color: theme.colors.background,
+  },
+  commitAndPushButton: {
+    height: 26,
+    paddingHorizontal: theme.spacing[2],
+    borderRadius: theme.borderRadius.md,
+    borderWidth: theme.borderWidth[1],
+    borderColor: "#0ea5e9",
+    backgroundColor: "rgba(14, 165, 233, 0.14)",
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  commitAndPushButtonText: {
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.semibold,
+    color: "#0ea5e9",
+  },
+  buttonDisabled: {
+    opacity: 0.45,
+  },
+  stashMenuContent: {
+    minWidth: 280,
+    maxWidth: 360,
+    padding: theme.spacing[2],
+    gap: theme.spacing[1],
+  },
+  stashComposerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[1],
+    paddingBottom: theme.spacing[1],
+  },
+  stashInput: {
+    flex: 1,
+    minWidth: 0,
+    height: 26,
+    paddingHorizontal: theme.spacing[2],
+    borderRadius: theme.borderRadius.sm,
+    borderWidth: theme.borderWidth[1],
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface1,
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
+  },
+  stashSaveButton: {
+    height: 26,
+    paddingHorizontal: theme.spacing[2],
+    borderRadius: theme.borderRadius.sm,
+    backgroundColor: theme.colors.foreground,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stashSaveButtonText: {
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.semibold,
+    color: theme.colors.background,
+  },
+  stashEmptyRow: {
+    paddingVertical: theme.spacing[3],
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stashEmptyText: {
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.foregroundMuted,
+  },
+  stashEntryRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
+    paddingHorizontal: theme.spacing[1],
+  },
+  stashEntryInfo: {
+    flex: 1,
+    minWidth: 0,
+  },
+  stashEntryTitle: {
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.foreground,
+    fontWeight: theme.fontWeight.medium,
+  },
+  stashEntrySubtitle: {
+    fontSize: 10,
+    color: theme.colors.foregroundMuted,
+  },
+  stashEntryActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    flexShrink: 0,
+  },
+  stashActionPill: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: theme.borderRadius.sm,
+    borderWidth: theme.borderWidth[1],
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface1,
+  },
+  stashActionPillDestructive: {
+    borderColor: theme.colors.border,
+  },
+  stashActionPillText: {
+    fontSize: 10,
+    color: theme.colors.foreground,
+  },
+  stashActionTextDestructive: {
+    color: theme.colors.destructive,
   },
   diffStatusIconHidden: {
     opacity: 0,

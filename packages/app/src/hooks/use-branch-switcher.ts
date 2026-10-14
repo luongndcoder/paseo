@@ -6,7 +6,7 @@ import type { ComboboxOption } from "@/components/ui/combobox";
 import type { ToastApi } from "@/components/toast-host";
 import { invalidateCheckoutGitQueriesForClient } from "@/git/query-keys";
 import { createBranchSwitcherOperations } from "@/git/branch-switcher-operations";
-import { confirmDialog } from "@/utils/confirm-dialog";
+import { canRenderDomConfirmModal, confirmDialog } from "@/utils/confirm-dialog";
 
 interface UseBranchSwitcherInput {
   client: DaemonClient | null;
@@ -151,34 +151,68 @@ export function useBranchSwitcher({
 
   const handleBranchSelect = useCallback(
     (branchId: string) => {
-      if (branchId === currentBranchName) return;
+      const trimmedBranch = branchId.trim();
+      if (!trimmedBranch || trimmedBranch === currentBranchName) return;
 
       void (async () => {
         if (!operations) return;
+        const knownBranches = branchSuggestionsQuery.data;
+        const shouldCreate = Array.isArray(knownBranches) && !knownBranches.includes(trimmedBranch);
+        if (canRenderDomConfirmModal()) {
+          const confirmed = await confirmDialog({
+            title: shouldCreate ? "Create & Checkout Branch" : "Checkout Branch",
+            message: shouldCreate
+              ? `Create new branch "${trimmedBranch}" from ${currentBranchName ?? "HEAD"} and switch to it?`
+              : `Switch working tree from "${currentBranchName ?? "HEAD"}" to "${trimmedBranch}"?`,
+            confirmLabel: shouldCreate ? "Create & Checkout" : "Checkout",
+            cancelLabel: "Cancel",
+          });
+          if (!confirmed) return;
+        }
         try {
-          const payload = await operations.switchBranch(branchId);
+          const payload = shouldCreate
+            ? await operations.createBranch(trimmedBranch)
+            : await operations.switchBranch(trimmedBranch);
           if (payload.error) {
             // If the error is about uncommitted changes, offer the stash dialog
-            if (payload.error.message.toLowerCase().includes("uncommitted")) {
-              await stashAndSwitch(branchId);
+            if (!shouldCreate && payload.error.message.toLowerCase().includes("uncommitted")) {
+              await stashAndSwitch(trimmedBranch);
               return;
             }
             toast.error(payload.error.message);
             return;
           }
+          if (shouldCreate) {
+            await queryClient.invalidateQueries({
+              queryKey: ["branchSuggestions", normalizedServerId, normalizedWorkspaceId],
+            });
+            toast.show(
+              t("branchSwitcher.createdBranch", {
+                branchName: trimmedBranch,
+                defaultValue: `Created and switched to ${trimmedBranch}`,
+              }),
+              { variant: "success" },
+            );
+          }
           // Success — refresh and check for stashes on the target branch
           await invalidateStashAndCheckout();
-          await maybeRestoreStashForBranch(branchId);
+          if (!shouldCreate) {
+            await maybeRestoreStashForBranch(trimmedBranch);
+          }
         } catch (err) {
           toast.error(err instanceof Error ? err.message : t("branchSwitcher.failedToSwitch"));
         }
       })();
     },
     [
-      operations,
+      branchSuggestionsQuery.data,
       currentBranchName,
       invalidateStashAndCheckout,
       maybeRestoreStashForBranch,
+      normalizedServerId,
+      normalizedWorkspaceId,
+      operations,
+      queryClient,
       stashAndSwitch,
       t,
       toast,

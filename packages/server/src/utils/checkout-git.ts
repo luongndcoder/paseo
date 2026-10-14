@@ -1,9 +1,22 @@
 import { resolve, dirname, basename } from "path";
+import { tmpdir } from "os";
 import { existsSync, realpathSync } from "fs";
-import { open as openFile, readFile, stat as statFile } from "fs/promises";
+import { chmod, open as openFile, readFile, stat as statFile, unlink, writeFile } from "fs/promises";
 import { setImmediate } from "node:timers/promises";
 import { TTLCache } from "@isaacs/ttlcache";
-import type { CheckoutCommit, CheckoutCommitFile } from "@getpaseo/protocol/messages";
+import type {
+  CheckoutCommit,
+  CheckoutCommitFile,
+  CheckoutGitBlameLine,
+  CheckoutGitBranchNode,
+  CheckoutGitConflictFilePayload,
+  CheckoutGitConflictState,
+  CheckoutGitDiffDetail,
+  CheckoutGitLogAction,
+  CheckoutGitRemoteBranchNode,
+  CheckoutGitStashNode,
+  CheckoutGitTagNode,
+} from "@getpaseo/protocol/messages";
 import { parseGitHubRemoteIdentity, parseGitRemoteLocation } from "@getpaseo/protocol/git-remote";
 import { maxBase64EncryptedPlaintextByteLength } from "@getpaseo/relay";
 import type { Logger } from "pino";
@@ -2644,6 +2657,950 @@ export async function listCheckoutCommits({
   return { baseRef: comparisonBaseRef, commits };
 }
 
+const GRAPH_COMMIT_LOG_FORMAT = "%x1e%H%x00%h%x00%P%x00%D%x00%an%x00%ae%x00%aI%x00%s%x00%b%x00";
+
+function parseGraphCommitRecords(stdout: string, unpushedShas: Set<string>): CheckoutCommit[] {
+  const records = stdout.split(COMMIT_RECORD_SEPARATOR).filter((record) => record.length > 0);
+  const commits: CheckoutCommit[] = [];
+  for (const record of records) {
+    const fields = record.split(COMMIT_FIELD_SEPARATOR);
+    if (fields.length < 9) {
+      continue;
+    }
+    const sha = (fields[0] ?? "").trim();
+    if (!sha) {
+      continue;
+    }
+    const shortSha = (fields[1] ?? "").trim();
+    const parentsRaw = (fields[2] ?? "").trim();
+    const parents = parentsRaw ? parentsRaw.split(/\s+/).filter(Boolean) : [];
+    const refsRaw = (fields[3] ?? "").trim();
+    const refs = refsRaw
+      ? refsRaw
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean)
+      : [];
+    const authorName = fields[4] ?? "";
+    const authorEmail = (fields[5] ?? "").trim();
+    const authorDate = (fields[6] ?? "").trim();
+    const subject = fields[7] ?? "";
+    const body = (fields[8] ?? "").trim();
+    const tail = fields.slice(9).join(COMMIT_FIELD_SEPARATOR);
+
+    const stats = new Map<string, { additions: number; deletions: number }>();
+    const statuses = new Map<string, CheckoutCommitFileStatus>();
+    const tailLines = tail.split("\n");
+    for (const rawLine of tailLines) {
+      const line = rawLine.trim();
+      if (!line) {
+        continue;
+      }
+      if (line.startsWith(":")) {
+        parseRawStatusLine(line, statuses);
+      } else {
+        parseNumstatLine(line, stats);
+      }
+    }
+
+    const files: CheckoutCommitFile[] = [];
+    for (const [path, stat] of stats) {
+      const status = statuses.get(path);
+      files.push({
+        path,
+        additions: stat.additions,
+        deletions: stat.deletions,
+        ...(status ? { status } : {}),
+      });
+    }
+
+    commits.push({
+      sha,
+      shortSha,
+      subject,
+      authorName,
+      ...(authorEmail ? { authorEmail } : {}),
+      authorDate,
+      ...(body ? { body } : {}),
+      parents,
+      refs,
+      isOnRemote: !unpushedShas.has(sha),
+      files,
+    });
+  }
+  return commits;
+}
+
+const parseUnifiedDiff = parseDiff;
+
+async function checkGitPathExists(cwd: string, gitSubPath: string): Promise<boolean> {
+  try {
+    const res = await runGitCommand(["rev-parse", "--git-path", gitSubPath], {
+      cwd,
+      envOverlay: READ_ONLY_GIT_ENV,
+    });
+    const rawPath = res.stdout.trim();
+    if (!rawPath) return false;
+    return existsSync(resolve(cwd, rawPath));
+  } catch {
+    return false;
+  }
+}
+
+async function detectGitActiveOperation(
+  cwd: string,
+): Promise<"merge" | "rebase" | "cherry-pick" | null> {
+  const [hasMergeHead, hasRebaseHead, hasRebaseMerge, hasRebaseApply, hasCherryPickHead] =
+    await Promise.all([
+      checkGitPathExists(cwd, "MERGE_HEAD"),
+      checkGitPathExists(cwd, "REBASE_HEAD"),
+      checkGitPathExists(cwd, "rebase-merge"),
+      checkGitPathExists(cwd, "rebase-apply"),
+      checkGitPathExists(cwd, "CHERRY_PICK_HEAD"),
+    ]);
+
+  if (hasMergeHead) return "merge";
+  if (hasRebaseHead || hasRebaseMerge || hasRebaseApply) return "rebase";
+  if (hasCherryPickHead) return "cherry-pick";
+  return null;
+}
+
+async function detectGitConflictState(cwd: string): Promise<CheckoutGitConflictState> {
+  const [diffRes, activeOp] = await Promise.all([
+    runGitCommand(["diff", "--name-only", "--diff-filter=U"], {
+      cwd,
+      envOverlay: READ_ONLY_GIT_ENV,
+    }).catch(() => ({ stdout: "" })),
+    detectGitActiveOperation(cwd),
+  ]);
+
+  const conflictFiles = diffRes.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const inProgress = activeOp ?? (conflictFiles.length > 0 ? "conflict" : null);
+  return {
+    inProgress,
+    conflictFiles,
+  };
+}
+
+async function listRefsAndBranches(cwd: string): Promise<{
+  branches: CheckoutGitBranchNode[];
+  remoteBranches: CheckoutGitRemoteBranchNode[];
+  tags: CheckoutGitTagNode[];
+  stashes: CheckoutGitStashNode[];
+  conflictState: CheckoutGitConflictState;
+}> {
+  const [localRes, remoteRes, tagRes, stashRes, conflictState] = await Promise.all([
+    runGitCommand(
+      [
+        "for-each-ref",
+        "--sort=-committerdate",
+        "--format=%(refname:short)%00%(objectname)%00%(HEAD)%00%(upstream:short)%00%(upstream:track)",
+        "refs/heads",
+      ],
+      { cwd, envOverlay: READ_ONLY_GIT_ENV },
+    ).catch(() => ({ stdout: "" })),
+    runGitCommand(
+      [
+        "for-each-ref",
+        "--sort=-committerdate",
+        "--format=%(refname:short)%00%(objectname)",
+        "refs/remotes",
+      ],
+      { cwd, envOverlay: READ_ONLY_GIT_ENV },
+    ).catch(() => ({ stdout: "" })),
+    runGitCommand(
+      [
+        "for-each-ref",
+        "--sort=-creatordate",
+        "--format=%(refname:short)%00%(*objectname)%00%(objectname)%00%(creatordate:iso-strict)",
+        "refs/tags",
+      ],
+      { cwd, envOverlay: READ_ONLY_GIT_ENV },
+    ).catch(() => ({ stdout: "" })),
+    runGitCommand(["stash", "list", "--format=%gd%x09%H%x09%aI%x09%gs"], {
+      cwd,
+      envOverlay: READ_ONLY_GIT_ENV,
+    }).catch(() => ({ stdout: "" })),
+    detectGitConflictState(cwd),
+  ]);
+
+  const branches: CheckoutGitBranchNode[] = [];
+  for (const line of localRes.stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const [name, sha, headMarker, upstream, track] = trimmed.split("\0");
+    if (!name || !sha) continue;
+    let ahead = 0;
+    let behind = 0;
+    if (track) {
+      const aheadMatch = /ahead\s+(\d+)/.exec(track);
+      const behindMatch = /behind\s+(\d+)/.exec(track);
+      if (aheadMatch?.[1]) ahead = Number.parseInt(aheadMatch[1], 10) || 0;
+      if (behindMatch?.[1]) behind = Number.parseInt(behindMatch[1], 10) || 0;
+    }
+    branches.push({
+      name,
+      sha,
+      isCurrent: headMarker === "*",
+      upstream: upstream || null,
+      ahead,
+      behind,
+    });
+  }
+
+  const remoteBranches: CheckoutGitRemoteBranchNode[] = [];
+  for (const line of remoteRes.stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const [name, sha] = trimmed.split("\0");
+    if (!name || !sha || name.endsWith("/HEAD") || !name.includes("/")) continue;
+    const slashIdx = name.indexOf("/");
+    const remote = name.slice(0, slashIdx);
+    remoteBranches.push({ name, sha, remote });
+  }
+
+  const tags: CheckoutGitTagNode[] = [];
+  for (const line of tagRes.stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const [name, peeledSha, objSha, date] = trimmed.split("\0");
+    const targetSha = (peeledSha || objSha || "").trim();
+    if (!name || !targetSha) continue;
+    tags.push({
+      name,
+      sha: targetSha,
+      ...(date ? { date } : {}),
+    });
+  }
+
+  const stashes: CheckoutGitStashNode[] = [];
+  for (const line of stashRes.stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const [refRaw, shaRaw, dateRaw, ...subjectParts] = trimmed.split("\t");
+    const ref = (refRaw ?? "").trim();
+    const sha = (shaRaw ?? "").trim();
+    const date = (dateRaw ?? "").trim();
+    const gs = subjectParts.join("\t").trim();
+    if (!ref || !sha) continue;
+    const idxMatch = /stash@\{(\d+)\}/.exec(ref);
+    const index = idxMatch?.[1] ? Number.parseInt(idxMatch[1], 10) : stashes.length;
+    const branchMatch = /^(?:WIP on|On) ([^:]+): (.*)$/.exec(gs);
+    const branch = branchMatch?.[1]?.trim() || null;
+    const message = branchMatch?.[2]?.trim() || gs || ref;
+    stashes.push({
+      index,
+      ref,
+      branch,
+      message,
+      date,
+      sha,
+    });
+  }
+
+  return { branches, remoteBranches, tags, stashes, conflictState };
+}
+
+export async function queryGitGraphAndRefs({
+  cwd,
+  allBranches = true,
+  ref,
+  search,
+  author,
+  filePath,
+  limit = 150,
+  context,
+}: {
+  cwd: string;
+  allBranches?: boolean;
+  ref?: string;
+  search?: string;
+  author?: string;
+  filePath?: string;
+  limit?: number;
+  context?: CheckoutContext;
+}): Promise<{
+  baseRef: string | null;
+  commits: CheckoutCommit[];
+  headSha: string | null;
+  currentBranch: string | null;
+  lastCommitMessage: string | null;
+  branches: CheckoutGitBranchNode[];
+  remoteBranches: CheckoutGitRemoteBranchNode[];
+  tags: CheckoutGitTagNode[];
+  stashes: CheckoutGitStashNode[];
+  conflictState: CheckoutGitConflictState;
+}> {
+  await requireGitRepo(cwd);
+  const clampedLimit = Math.max(1, Math.min(limit, 400));
+
+  const [currentBranch, headShaRes, lastMsgRes, refsData, unpushedShas, baseResolution] =
+    await Promise.all([
+      getCurrentBranch(cwd).catch(() => null),
+      runGitCommand(["rev-parse", "--verify", "HEAD"], {
+        cwd,
+        envOverlay: READ_ONLY_GIT_ENV,
+      }).catch(() => ({ stdout: "" })),
+      runGitCommand(["log", "-1", "--format=%B", "HEAD"], {
+        cwd,
+        envOverlay: READ_ONLY_GIT_ENV,
+      }).catch(() => ({ stdout: "" })),
+      listRefsAndBranches(cwd),
+      getUnpushedCommitShas(cwd, context).catch(() => new Set<string>()),
+      resolveBaseRefForCwd(cwd, context).catch(() => ({ resolvedBaseRef: null })),
+    ]);
+
+  const headSha = headShaRes.stdout.trim() || null;
+  const lastCommitMessage = lastMsgRes.stdout.trim() || null;
+
+  const logArgs: string[] = ["log", "--topo-order", `--max-count=${clampedLimit}`];
+  const trimmedRef = ref?.trim();
+  const trimmedFilePath = filePath?.trim();
+
+  if (trimmedRef && trimmedRef !== "ALL") {
+    logArgs.push(trimmedRef);
+  } else if (allBranches && !trimmedFilePath) {
+    logArgs.push("--branches", "--remotes", "--tags", "HEAD");
+  } else {
+    logArgs.push("HEAD");
+  }
+
+  if (search?.trim()) {
+    logArgs.push(`--grep=${search.trim()}`, "-i");
+  }
+  if (author?.trim()) {
+    logArgs.push(`--author=${author.trim()}`, "-i");
+  }
+
+  logArgs.push(
+    "--diff-merges=first-parent",
+    `--format=${GRAPH_COMMIT_LOG_FORMAT}`,
+    "--raw",
+    "--numstat",
+    "-M",
+  );
+
+  if (trimmedFilePath) {
+    logArgs.push("--follow", "--", trimmedFilePath);
+  }
+
+  let commits: CheckoutCommit[] = [];
+  if (headSha) {
+    const logRes = await runGitCommand(logArgs, {
+      cwd,
+      envOverlay: READ_ONLY_GIT_ENV,
+      maxOutputBytes: 16 * 1024 * 1024,
+    });
+    commits = parseGraphCommitRecords(logRes.stdout, unpushedShas);
+  }
+
+  return {
+    baseRef: baseResolution.resolvedBaseRef,
+    commits,
+    headSha,
+    currentBranch,
+    lastCommitMessage,
+    branches: refsData.branches,
+    remoteBranches: refsData.remoteBranches,
+    tags: refsData.tags,
+    stashes: refsData.stashes,
+    conflictState: refsData.conflictState,
+  };
+}
+
+export async function getGitConflictFile(
+  cwd: string,
+  filePath: string,
+): Promise<CheckoutGitConflictFilePayload | null> {
+  await requireGitRepo(cwd);
+  const trimmedPath = filePath.trim();
+  if (!trimmedPath || trimmedPath.startsWith("-")) {
+    throw new Error(`Invalid conflict file path: ${filePath}`);
+  }
+  const resolvedRoot = resolve(cwd);
+  const resolvedTarget = resolve(resolvedRoot, trimmedPath);
+  if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(`${resolvedRoot}/`)) {
+    throw new Error(`Invalid conflict file path outside repository: ${filePath}`);
+  }
+
+  const [baseContent, oursContent, theirsContent, workingContent, currentBranch, activeOp] =
+    await Promise.all([
+      runGitCommand(["show", `:1:${trimmedPath}`], {
+        cwd,
+        envOverlay: READ_ONLY_GIT_ENV,
+      })
+        .then((res) => res.stdout)
+        .catch(() => ""),
+      runGitCommand(["show", `:2:${trimmedPath}`], {
+        cwd,
+        envOverlay: READ_ONLY_GIT_ENV,
+      })
+        .then((res) => res.stdout)
+        .catch(() => ""),
+      runGitCommand(["show", `:3:${trimmedPath}`], {
+        cwd,
+        envOverlay: READ_ONLY_GIT_ENV,
+      })
+        .then((res) => res.stdout)
+        .catch(() => ""),
+      readFile(resolvedTarget, "utf8").catch(() => ""),
+      getCurrentBranch(cwd).catch(() => null),
+      detectGitActiveOperation(cwd).catch(() => null),
+    ]);
+
+  const oursLabel = currentBranch ? `HEAD (${currentBranch})` : "HEAD (Local)";
+  const theirsLabel =
+    activeOp === "rebase"
+      ? "REBASE_HEAD / Incoming"
+      : activeOp === "cherry-pick"
+        ? "CHERRY_PICK_HEAD / Incoming"
+        : "MERGE_HEAD / Incoming";
+
+  return {
+    path: trimmedPath,
+    baseContent,
+    oursContent,
+    theirsContent,
+    workingContent,
+    oursLabel,
+    theirsLabel,
+  };
+}
+
+export async function getGitStashDetail(
+  cwd: string,
+  stashIndex: number,
+): Promise<CheckoutGitDiffDetail | null> {
+  await requireGitRepo(cwd);
+  if (!Number.isInteger(stashIndex) || stashIndex < 0) {
+    throw new Error(`Invalid stash index: ${stashIndex}`);
+  }
+  const stashRef = `stash@{${stashIndex}}`;
+  const [patchRes, numstatRes] = await Promise.all([
+    runGitCommand(["stash", "show", "-p", "--no-color", stashRef], {
+      cwd,
+      envOverlay: READ_ONLY_GIT_ENV,
+      maxOutputBytes: 16 * 1024 * 1024,
+    }),
+    runGitCommand(["stash", "show", "--numstat", stashRef], {
+      cwd,
+      envOverlay: READ_ONLY_GIT_ENV,
+    }).catch(() => ({ stdout: "" })),
+  ]);
+
+  const diffs = parseUnifiedDiff(patchRes.stdout);
+  const stats = new Map<string, { additions: number; deletions: number }>();
+  for (const rawLine of numstatRes.stdout.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    parseNumstatLine(line, stats);
+  }
+
+  const filesByPath = new Map<string, CheckoutCommitFile>();
+  for (const diff of diffs) {
+    const stat = stats.get(diff.path);
+    filesByPath.set(diff.path, {
+      path: diff.path,
+      additions: stat?.additions ?? diff.additions,
+      deletions: stat?.deletions ?? diff.deletions,
+      status: diff.isNew
+        ? "added"
+        : diff.isDeleted
+          ? "deleted"
+          : diff.oldPath
+            ? "renamed"
+            : "modified",
+    });
+  }
+  for (const [path, stat] of stats) {
+    if (!filesByPath.has(path)) {
+      filesByPath.set(path, {
+        path,
+        additions: stat.additions,
+        deletions: stat.deletions,
+        status: "modified",
+      });
+    }
+  }
+
+  return {
+    label: stashRef,
+    files: Array.from(filesByPath.values()),
+    diffs,
+  };
+}
+
+export async function getGitCompareDetail(
+  cwd: string,
+  compareRef: string,
+): Promise<CheckoutGitDiffDetail | null> {
+  await requireGitRepo(cwd);
+  const trimmedRef = compareRef.trim();
+  if (!trimmedRef || trimmedRef.startsWith("-")) {
+    throw new Error(`Invalid compare ref: ${compareRef}`);
+  }
+
+  let diffStdout = "";
+  try {
+    const res = await runGitCommand(["diff", "--no-color", `${trimmedRef}...HEAD`], {
+      cwd,
+      envOverlay: READ_ONLY_GIT_ENV,
+      maxOutputBytes: 16 * 1024 * 1024,
+    });
+    diffStdout = res.stdout;
+  } catch {
+    const res = await runGitCommand(["diff", "--no-color", `${trimmedRef}..HEAD`], {
+      cwd,
+      envOverlay: READ_ONLY_GIT_ENV,
+      maxOutputBytes: 16 * 1024 * 1024,
+    });
+    diffStdout = res.stdout;
+  }
+
+  const diffs = parseUnifiedDiff(diffStdout);
+  const files: CheckoutCommitFile[] = diffs.map((diff) => ({
+    path: diff.path,
+    additions: diff.additions,
+    deletions: diff.deletions,
+    status: diff.isNew
+      ? "added"
+      : diff.isDeleted
+        ? "deleted"
+        : diff.oldPath
+          ? "renamed"
+          : "modified",
+  }));
+
+  return {
+    label: `${trimmedRef} ↔ HEAD`,
+    files,
+    diffs,
+  };
+}
+
+export async function executeGitLogAction(
+  cwd: string,
+  gitAction: CheckoutGitLogAction,
+): Promise<{ success: boolean; message: string }> {
+  await requireGitRepo(cwd);
+  const target = gitAction.target.trim();
+  const targetOptionalKinds = new Set([
+    "stash-create",
+    "apply-hunk-patch",
+    "abort-operation",
+    "continue-operation",
+  ]);
+  if ((!target && !targetOptionalKinds.has(gitAction.kind)) || target.startsWith("-")) {
+    throw new Error(`Invalid git target: ${target}`);
+  }
+  const secondTarget = gitAction.secondTarget?.trim();
+  if (secondTarget && secondTarget.startsWith("-")) {
+    throw new Error(`Invalid secondary git target: ${secondTarget}`);
+  }
+
+  switch (gitAction.kind) {
+    case "cherry-pick": {
+      await runGitCommand(["cherry-pick", target], { cwd, timeout: 120_000 });
+      return { success: true, message: `Cherry-picked ${target.slice(0, 7)}` };
+    }
+    case "revert": {
+      await runGitCommand(["revert", "--no-edit", target], { cwd, timeout: 120_000 });
+      return { success: true, message: `Reverted ${target.slice(0, 7)}` };
+    }
+    case "reset": {
+      const modeFlag =
+        gitAction.mode === "soft"
+          ? "--soft"
+          : gitAction.mode === "hard"
+            ? "--hard"
+            : "--mixed";
+      await runGitCommand(["reset", modeFlag, target], { cwd, timeout: 120_000 });
+      return {
+        success: true,
+        message: `Reset (${gitAction.mode ?? "mixed"}) to ${target.slice(0, 7)}`,
+      };
+    }
+    case "checkout-ref": {
+      await runGitCommand(["checkout", target], { cwd, timeout: 120_000 });
+      return { success: true, message: `Checked out ${target}` };
+    }
+    case "create-branch": {
+      const args = ["checkout", "-b", target];
+      if (secondTarget) {
+        args.push(secondTarget);
+      }
+      await runGitCommand(args, { cwd, timeout: 120_000 });
+      return { success: true, message: `Created and checked out branch ${target}` };
+    }
+    case "delete-branch": {
+      const flag = gitAction.force ? "-D" : "-d";
+      await runGitCommand(["branch", flag, target], { cwd, timeout: 120_000 });
+      return { success: true, message: `Deleted branch ${target}` };
+    }
+    case "merge-ref": {
+      await runGitCommand(["merge", "--no-edit", target], { cwd, timeout: 120_000 });
+      return { success: true, message: `Merged ${target} into current branch` };
+    }
+    case "rebase-onto": {
+      await runGitCommand(["rebase", target], { cwd, timeout: 120_000 });
+      return { success: true, message: `Rebased current branch onto ${target}` };
+    }
+    case "create-tag": {
+      const args = ["tag", target];
+      if (secondTarget) {
+        args.push(secondTarget);
+      }
+      await runGitCommand(args, { cwd, timeout: 120_000 });
+      return { success: true, message: `Created tag ${target}` };
+    }
+    case "delete-tag": {
+      await runGitCommand(["tag", "-d", target], { cwd, timeout: 120_000 });
+      return { success: true, message: `Deleted tag ${target}` };
+    }
+    case "reword-commit": {
+      const newMessage = gitAction.message?.trim();
+      if (!newMessage) {
+        throw new Error("Commit message is required for reword-commit");
+      }
+      const [headRes, targetRes] = await Promise.all([
+        runGitCommand(["rev-parse", "--verify", "HEAD"], { cwd, envOverlay: READ_ONLY_GIT_ENV }),
+        runGitCommand(["rev-parse", "--verify", target], { cwd, envOverlay: READ_ONLY_GIT_ENV }),
+      ]);
+      const headSha = headRes.stdout.trim();
+      const targetSha = targetRes.stdout.trim();
+      if (headSha === targetSha) {
+        await runGitCommand(["commit", "--amend", "-m", newMessage], { cwd, timeout: 120_000 });
+        return { success: true, message: `Reworded commit ${targetSha.slice(0, 7)}` };
+      }
+
+      let hasParent = true;
+      try {
+        await runGitCommand(["rev-parse", "--verify", `${targetSha}^`], {
+          cwd,
+          envOverlay: READ_ONLY_GIT_ENV,
+        });
+      } catch {
+        hasParent = false;
+      }
+
+      const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const seqScriptPath = resolve(tmpdir(), `paseo-git-seq-${uniqueSuffix}.cjs`);
+      const msgScriptPath = resolve(tmpdir(), `paseo-git-msg-${uniqueSuffix}.cjs`);
+
+      const seqScript = [
+        "#!/usr/bin/env node",
+        'const fs = require("fs");',
+        "const file = process.argv[2];",
+        'const content = fs.readFileSync(file, "utf8");',
+        `const targetFull = ${JSON.stringify(targetSha)};`,
+        "let replaced = false;",
+        "const updated = content",
+        '  .split("\\n")',
+        "  .map((line) => {",
+        "    if (!replaced) {",
+        "      const m = /^pick\\s+([0-9a-f]+)\\b(.*)$/.exec(line);",
+        "      if (m && (targetFull.startsWith(m[1]) || m[1].startsWith(targetFull))) {",
+        "        replaced = true;",
+        '        return "reword " + m[1] + m[2];',
+        "      }",
+        "    }",
+        "    return line;",
+        "  })",
+        '  .join("\\n");',
+        'fs.writeFileSync(file, updated, "utf8");',
+      ].join("\n");
+
+      const msgScript = [
+        "#!/usr/bin/env node",
+        'const fs = require("fs");',
+        "const file = process.argv[2];",
+        `fs.writeFileSync(file, ${JSON.stringify(`${newMessage}\n`)}, "utf8");`,
+      ].join("\n");
+
+      await writeFile(seqScriptPath, seqScript, "utf8");
+      await writeFile(msgScriptPath, msgScript, "utf8");
+      await chmod(seqScriptPath, 0o755);
+      await chmod(msgScriptPath, 0o755);
+
+      try {
+        const rebaseArgs = hasParent
+          ? ["rebase", "-i", `${targetSha}^`]
+          : ["rebase", "-i", "--root"];
+        await runGitCommand(rebaseArgs, {
+          cwd,
+          timeout: 120_000,
+          envOverlay: {
+            GIT_SEQUENCE_EDITOR: seqScriptPath,
+            GIT_EDITOR: msgScriptPath,
+          },
+        });
+      } finally {
+        await unlink(seqScriptPath).catch(() => {});
+        await unlink(msgScriptPath).catch(() => {});
+      }
+
+      return { success: true, message: `Reworded commit ${targetSha.slice(0, 7)}` };
+    }
+    case "squash-commit": {
+      const targetRes = await runGitCommand(["rev-parse", "--verify", target], {
+        cwd,
+        envOverlay: READ_ONLY_GIT_ENV,
+      });
+      const targetSha = targetRes.stdout.trim();
+      try {
+        await runGitCommand(["rev-parse", "--verify", `${targetSha}^`], {
+          cwd,
+          envOverlay: READ_ONLY_GIT_ENV,
+        });
+      } catch {
+        throw new Error("Cannot squash root commit without a parent");
+      }
+
+      let hasGrandparent = true;
+      try {
+        await runGitCommand(["rev-parse", "--verify", `${targetSha}~2`], {
+          cwd,
+          envOverlay: READ_ONLY_GIT_ENV,
+        });
+      } catch {
+        hasGrandparent = false;
+      }
+
+      const customMsg = gitAction.message?.trim();
+      const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const seqScriptPath = resolve(tmpdir(), `paseo-git-squash-seq-${uniqueSuffix}.cjs`);
+      const msgScriptPath = resolve(tmpdir(), `paseo-git-squash-msg-${uniqueSuffix}.cjs`);
+
+      const seqScript = [
+        "#!/usr/bin/env node",
+        'const fs = require("fs");',
+        "const file = process.argv[2];",
+        'const content = fs.readFileSync(file, "utf8");',
+        `const targetFull = ${JSON.stringify(targetSha)};`,
+        `const word = ${JSON.stringify(customMsg ? "squash" : "fixup")};`,
+        "let replaced = false;",
+        "const updated = content",
+        '  .split("\\n")',
+        "  .map((line) => {",
+        "    if (!replaced) {",
+        "      const m = /^pick\\s+([0-9a-f]+)\\b(.*)$/.exec(line);",
+        "      if (m && (targetFull.startsWith(m[1]) || m[1].startsWith(targetFull))) {",
+        "        replaced = true;",
+        '        return word + " " + m[1] + m[2];',
+        "      }",
+        "    }",
+        "    return line;",
+        "  })",
+        '  .join("\\n");',
+        'fs.writeFileSync(file, updated, "utf8");',
+      ].join("\n");
+
+      await writeFile(seqScriptPath, seqScript, "utf8");
+      await chmod(seqScriptPath, 0o755);
+
+      if (customMsg) {
+        const msgScript = [
+          "#!/usr/bin/env node",
+          'const fs = require("fs");',
+          "const file = process.argv[2];",
+          `fs.writeFileSync(file, ${JSON.stringify(`${customMsg}\n`)}, "utf8");`,
+        ].join("\n");
+        await writeFile(msgScriptPath, msgScript, "utf8");
+        await chmod(msgScriptPath, 0o755);
+      }
+
+      try {
+        const rebaseArgs = hasGrandparent
+          ? ["rebase", "-i", `${targetSha}~2`]
+          : ["rebase", "-i", "--root"];
+        await runGitCommand(rebaseArgs, {
+          cwd,
+          timeout: 120_000,
+          envOverlay: {
+            GIT_SEQUENCE_EDITOR: seqScriptPath,
+            GIT_EDITOR: customMsg ? msgScriptPath : "true",
+          },
+        });
+      } finally {
+        await unlink(seqScriptPath).catch(() => {});
+        if (customMsg) {
+          await unlink(msgScriptPath).catch(() => {});
+        }
+      }
+
+      return { success: true, message: `Squashed commit ${targetSha.slice(0, 7)} into parent` };
+    }
+    case "drop-commit": {
+      await runGitCommand(["rebase", "--onto", `${target}^`, target], { cwd, timeout: 120_000 });
+      return { success: true, message: `Dropped commit ${target.slice(0, 7)}` };
+    }
+    case "stash-create": {
+      const stashMessage = gitAction.message?.trim() || target || "WIP";
+      await runGitCommand(["stash", "push", "-u", "-m", stashMessage], { cwd, timeout: 120_000 });
+      return { success: true, message: `Created stash: ${stashMessage}` };
+    }
+    case "stash-apply": {
+      const stashRef = target.startsWith("stash@{") ? target : `stash@{${target}}`;
+      await runGitCommand(["stash", "apply", stashRef], { cwd, timeout: 120_000 });
+      return { success: true, message: `Applied ${stashRef}` };
+    }
+    case "stash-pop": {
+      const stashRef = target.startsWith("stash@{") ? target : `stash@{${target}}`;
+      await runGitCommand(["stash", "pop", stashRef], { cwd, timeout: 120_000 });
+      return { success: true, message: `Popped ${stashRef}` };
+    }
+    case "stash-drop": {
+      const stashRef = target.startsWith("stash@{") ? target : `stash@{${target}}`;
+      await runGitCommand(["stash", "drop", stashRef], { cwd, timeout: 120_000 });
+      return { success: true, message: `Dropped ${stashRef}` };
+    }
+    case "stash-branch": {
+      const rawIdx = secondTarget || "0";
+      const stashRef = rawIdx.startsWith("stash@{") ? rawIdx : `stash@{${rawIdx}}`;
+      await runGitCommand(["stash", "branch", target, stashRef], { cwd, timeout: 120_000 });
+      return { success: true, message: `Created branch ${target} from ${stashRef}` };
+    }
+    case "apply-hunk-patch": {
+      const rawPatch = gitAction.patch;
+      if (!rawPatch || !rawPatch.trim()) {
+        throw new Error("Patch content is required for apply-hunk-patch");
+      }
+      const normalizedPatch = rawPatch.endsWith("\n") ? rawPatch : `${rawPatch}\n`;
+      const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const tmpPatchFile = resolve(tmpdir(), `paseo-hunk-patch-${uniqueSuffix}.patch`);
+      await writeFile(tmpPatchFile, normalizedPatch, "utf8");
+      try {
+        const applyArgs =
+          gitAction.patchMode === "stage"
+            ? ["apply", "--cached", "--unidiff-zero", "--whitespace=nowarn", tmpPatchFile]
+            : ["apply", "--reverse", "--unidiff-zero", "--whitespace=nowarn", tmpPatchFile];
+        await runGitCommand(applyArgs, { cwd, timeout: 60_000 });
+      } finally {
+        await unlink(tmpPatchFile).catch(() => {});
+      }
+      return {
+        success: true,
+        message: gitAction.patchMode === "stage" ? "Staged hunk" : "Rolled back hunk",
+      };
+    }
+    case "resolve-conflict": {
+      const resolvedRoot = resolve(cwd);
+      const resolvedTarget = resolve(resolvedRoot, target);
+      if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(`${resolvedRoot}/`)) {
+        throw new Error(`Invalid conflict file path outside repository: ${target}`);
+      }
+      await writeFile(resolvedTarget, gitAction.content ?? "", "utf8");
+      await runGitCommand(["add", "--", target], { cwd, timeout: 60_000 });
+      return { success: true, message: `Resolved conflict in ${target}` };
+    }
+    case "abort-operation": {
+      const activeOp = await detectGitActiveOperation(cwd);
+      if (activeOp === "merge") {
+        await runGitCommand(["merge", "--abort"], { cwd, timeout: 120_000 });
+        return { success: true, message: "Aborted merge" };
+      }
+      if (activeOp === "rebase") {
+        await runGitCommand(["rebase", "--abort"], { cwd, timeout: 120_000 });
+        return { success: true, message: "Aborted rebase" };
+      }
+      if (activeOp === "cherry-pick") {
+        await runGitCommand(["cherry-pick", "--abort"], { cwd, timeout: 120_000 });
+        return { success: true, message: "Aborted cherry-pick" };
+      }
+      throw new Error("No active merge, rebase, or cherry-pick operation to abort");
+    }
+    case "continue-operation": {
+      const activeOp = await detectGitActiveOperation(cwd);
+      if (activeOp === "merge") {
+        await runGitCommand(["commit", "--no-edit"], { cwd, timeout: 120_000 });
+        return { success: true, message: "Continued merge" };
+      }
+      if (activeOp === "rebase") {
+        await runGitCommand(["-c", "core.editor=true", "rebase", "--continue"], {
+          cwd,
+          timeout: 120_000,
+        });
+        return { success: true, message: "Continued rebase" };
+      }
+      if (activeOp === "cherry-pick") {
+        await runGitCommand(["-c", "core.editor=true", "cherry-pick", "--continue"], {
+          cwd,
+          timeout: 120_000,
+        });
+        return { success: true, message: "Continued cherry-pick" };
+      }
+      throw new Error("No active merge, rebase, or cherry-pick operation to continue");
+    }
+  }
+}
+
+export async function getGitFileBlame(
+  cwd: string,
+  filePath: string,
+): Promise<CheckoutGitBlameLine[]> {
+  await requireGitRepo(cwd);
+  const trimmedPath = filePath.trim();
+  if (!trimmedPath || trimmedPath.startsWith("-")) {
+    throw new Error(`Invalid file path for git blame: ${filePath}`);
+  }
+  const { stdout } = await runGitCommand(
+    ["blame", "--line-porcelain", "HEAD", "--", trimmedPath],
+    {
+      cwd,
+      envOverlay: READ_ONLY_GIT_ENV,
+      maxOutputBytes: 16 * 1024 * 1024,
+    },
+  );
+
+  const lines = stdout.split("\n");
+  const result: CheckoutGitBlameLine[] = [];
+  let currentSha = "";
+  let currentLineNum = 0;
+  let currentAuthor = "";
+  let currentAuthorTime = 0;
+  let currentSummary = "";
+
+  for (const line of lines) {
+    if (!currentSha) {
+      const headerMatch = /^([0-9a-f]{40})\s+\d+\s+(\d+)/.exec(line);
+      if (headerMatch?.[1] && headerMatch[2]) {
+        currentSha = headerMatch[1];
+        currentLineNum = Number.parseInt(headerMatch[2], 10) || 0;
+        currentAuthor = "";
+        currentAuthorTime = 0;
+        currentSummary = "";
+      }
+      continue;
+    }
+
+    if (line.startsWith("\t")) {
+      result.push({
+        lineNumber: currentLineNum,
+        sha: currentSha,
+        shortSha: currentSha.slice(0, 7),
+        author: currentAuthor,
+        authorTime: currentAuthorTime,
+        summary: currentSummary,
+        content: line.slice(1),
+      });
+      currentSha = "";
+    } else if (line.startsWith("author ")) {
+      currentAuthor = line.slice(7).trim();
+    } else if (line.startsWith("author-time ")) {
+      currentAuthorTime = Number.parseInt(line.slice(12).trim(), 10) || 0;
+    } else if (line.startsWith("summary ")) {
+      currentSummary = line.slice(8).trim();
+    }
+  }
+
+  return result;
+}
+
+
 /**
  * Fetches the unified diff of a single file as introduced by one commit and
  * parses it into the same {@link ParsedDiffFile} shape the diff subscription
@@ -3532,20 +4489,72 @@ export async function getCheckoutDiff(
   }
 
   if (compare.includeStructured) {
+    if (compare.mode === "uncommitted") {
+      await annotateUncommittedStageStatus(cwd, structured.files);
+    }
     return { diff: diffText, structured: structured.files };
   }
   return { diff: diffText };
 }
 
+async function annotateUncommittedStageStatus(
+  cwd: string,
+  files: ParsedDiffFile[],
+): Promise<void> {
+  if (files.length === 0) return;
+  try {
+    const status = await runGitCommand(["status", "--porcelain=v1", "-z", "-uall"], {
+      cwd,
+      envOverlay: READ_ONLY_GIT_ENV,
+      timeout: DISCARD_CHANGES_TIMEOUT_MS,
+    });
+    const stageMap = new Map<string, { staged: boolean; unstaged: boolean }>();
+    const tokens = status.stdout.split("\0");
+    for (let index = 0; index < tokens.length; index++) {
+      const token = tokens[index];
+      if (!token || token.length < 4) continue;
+      const x = token[0] ?? " ";
+      const y = token[1] ?? " ";
+      const filePath = token.slice(3);
+      if (x === "R" || x === "C") {
+        index += 1;
+      }
+      const staged = x !== " " && x !== "?" && x !== "!";
+      const unstaged = y !== " " && y !== "!";
+      stageMap.set(filePath, { staged, unstaged });
+    }
+    for (const file of files) {
+      const entry = stageMap.get(file.path);
+      if (entry) {
+        file.staged = entry.staged;
+        file.unstaged = entry.unstaged;
+      } else {
+        file.staged = false;
+        file.unstaged = true;
+      }
+    }
+  } catch {
+    // Non-fatal: leave staged/unstaged undefined if status check fails.
+  }
+}
+
 export async function commitChanges(
   cwd: string,
-  options: { message: string; addAll?: boolean },
+  options: { message: string; addAll?: boolean; paths?: string[]; amend?: boolean },
 ): Promise<void> {
   await requireGitRepo(cwd);
-  if (options.addAll ?? true) {
+  if (options.paths && options.paths.length > 0) {
+    await runGitCommand(["--literal-pathspecs", "add", "-A", "--", ...options.paths], {
+      cwd,
+      timeout: 120_000,
+    });
+  } else if (options.addAll ?? true) {
     await runGitCommand(["add", "-A"], { cwd, timeout: 120_000 });
   }
-  await runGitCommand(["commit", "-m", options.message], {
+  const commitArgs = options.amend
+    ? ["commit", "--amend", "-m", options.message]
+    : ["commit", "-m", options.message];
+  await runGitCommand(commitArgs, {
     cwd,
     timeout: 120_000,
   });
@@ -3553,6 +4562,38 @@ export async function commitChanges(
 
 export async function commitAll(cwd: string, message: string): Promise<void> {
   await commitChanges(cwd, { message, addAll: true });
+}
+
+export async function stageChanges(cwd: string, pathspecs: string[]): Promise<void> {
+  await requireGitRepo(cwd);
+  if (pathspecs.length === 0) {
+    return;
+  }
+  await runGitCommand(["--literal-pathspecs", "add", "-A", "--", ...pathspecs], {
+    cwd,
+    timeout: DISCARD_CHANGES_TIMEOUT_MS,
+  });
+}
+
+export async function unstageChanges(cwd: string, pathspecs: string[]): Promise<void> {
+  await requireGitRepo(cwd);
+  if (pathspecs.length === 0) {
+    return;
+  }
+  try {
+    await runGitCommand(["--literal-pathspecs", "reset", "-q", "HEAD", "--", ...pathspecs], {
+      cwd,
+      timeout: DISCARD_CHANGES_TIMEOUT_MS,
+    });
+  } catch {
+    await runGitCommand(
+      ["--literal-pathspecs", "rm", "--cached", "-r", "-q", "--ignore-unmatch", "--", ...pathspecs],
+      {
+        cwd,
+        timeout: DISCARD_CHANGES_TIMEOUT_MS,
+      },
+    );
+  }
 }
 
 export async function discardChanges(cwd: string, pathspecs: string[]): Promise<void> {

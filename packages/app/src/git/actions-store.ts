@@ -25,7 +25,9 @@ export type CheckoutGitAsyncActionId =
   | "disable-pr-auto-merge"
   | "merge-branch"
   | "merge-from-base"
-  | "discard-changes";
+  | "discard-changes"
+  | "stage-changes"
+  | "unstage-changes";
 
 type CheckoutKey = string;
 type StatusMap = Partial<Record<CheckoutGitAsyncActionId, CheckoutGitActionStatus>>;
@@ -102,7 +104,15 @@ interface CheckoutGitActionsStoreState {
     actionId: CheckoutGitAsyncActionId;
   }) => CheckoutGitActionStatus;
 
-  commit: (params: { serverId: string; cwd: string }) => Promise<void>;
+  commit: (params: {
+    serverId: string;
+    cwd: string;
+    message?: string;
+    addAll?: boolean;
+    paths?: string[];
+    amend?: boolean;
+    push?: boolean;
+  }) => Promise<void>;
   pull: (params: { serverId: string; cwd: string }) => Promise<void>;
   push: (params: { serverId: string; cwd: string }) => Promise<void>;
   pullAndPush: (params: { serverId: string; cwd: string }) => Promise<void>;
@@ -122,6 +132,18 @@ interface CheckoutGitActionsStoreState {
   mergeBranch: (params: { serverId: string; cwd: string; baseRef: string }) => Promise<void>;
   mergeFromBase: (params: { serverId: string; cwd: string; baseRef: string }) => Promise<void>;
   discardChanges: (params: { serverId: string; cwd: string; paths: string[] }) => Promise<void>;
+  stageChanges: (params: {
+    serverId: string;
+    cwd: string;
+    paths?: string[];
+    all?: boolean;
+  }) => Promise<void>;
+  unstageChanges: (params: {
+    serverId: string;
+    cwd: string;
+    paths?: string[];
+    all?: boolean;
+  }) => Promise<void>;
 }
 
 async function runCheckoutAction({
@@ -182,14 +204,22 @@ export const useCheckoutGitActionsStore = create<CheckoutGitActionsStoreState>()
     return get().statusByCheckout[key]?.[actionId] ?? "idle";
   },
 
-  commit: async ({ serverId, cwd }) => {
+  commit: async ({ serverId, cwd, message, addAll, paths, amend, push }) => {
     await runCheckoutAction({
       serverId,
       cwd,
       actionId: "commit",
       run: async () => {
         const client = resolveClient(serverId);
-        const payload = await client.checkoutCommit(cwd, { addAll: true });
+        const options =
+          message !== undefined ||
+          paths !== undefined ||
+          addAll !== undefined ||
+          amend !== undefined ||
+          push !== undefined
+            ? { message, addAll: addAll ?? true, paths, amend, push }
+            : { addAll: true };
+        const payload = await client.checkoutCommit(cwd, options);
         if (payload.error) {
           throw new Error(payload.error.message);
         }
@@ -384,6 +414,38 @@ export const useCheckoutGitActionsStore = create<CheckoutGitActionsStoreState>()
           throw new Error(
             payload.error?.message ?? i18n.t("workspace.fileActions.confirmRevert.failed"),
           );
+        }
+      },
+    });
+  },
+
+  stageChanges: async ({ serverId, cwd, paths, all }) => {
+    const targetPaths = all ? ["."] : (paths ?? []);
+    await runCheckoutAction({
+      serverId,
+      cwd,
+      actionId: "stage-changes",
+      run: async () => {
+        const client = resolveClient(serverId);
+        const payload = await client.checkoutStageChanges(cwd, { paths: targetPaths });
+        if (!payload.success) {
+          throw new Error(payload.error?.message ?? "Failed to stage changes");
+        }
+      },
+    });
+  },
+
+  unstageChanges: async ({ serverId, cwd, paths, all }) => {
+    const targetPaths = all ? ["."] : (paths ?? []);
+    await runCheckoutAction({
+      serverId,
+      cwd,
+      actionId: "unstage-changes",
+      run: async () => {
+        const client = resolveClient(serverId);
+        const payload = await client.checkoutUnstageChanges(cwd, { paths: targetPaths });
+        if (!payload.success) {
+          throw new Error(payload.error?.message ?? "Failed to unstage changes");
         }
       },
     });

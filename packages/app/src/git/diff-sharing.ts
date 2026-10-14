@@ -57,6 +57,8 @@ function equalFile(left: ParsedDiffFile, right: ParsedDiffFile): boolean {
     left.isDeleted !== right.isDeleted ||
     left.additions !== right.additions ||
     left.deletions !== right.deletions ||
+    left.staged !== right.staged ||
+    left.unstaged !== right.unstaged ||
     left.hunks.length !== right.hunks.length
   )
     return false;

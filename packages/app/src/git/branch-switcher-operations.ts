@@ -10,6 +10,8 @@ export function createBranchSwitcherOperations(client: DaemonClient, cwd: string
     saveStash: (branch: string | undefined) => client.stashSave(cwd, { branch }),
     popStash: (stashIndex: number) => client.stashPop(cwd, stashIndex),
     switchBranch: (branch: string) => client.checkoutSwitchBranch(cwd, branch),
+    createBranch: (branch: string) =>
+      client.checkoutSwitchBranch(cwd, branch, undefined, { create: true }),
   };
 }
 

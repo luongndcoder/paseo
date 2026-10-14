@@ -101,6 +101,10 @@ export function BranchSwitcher({
         value={currentBranchName}
         onSelect={handleBranchSelect}
         searchable
+        allowCustomValue
+        customValuePrefix={t("branchSwitcher.createBranchPrefix", {
+          defaultValue: "Create branch",
+        })}
         placeholder={t("branchSwitcher.placeholder")}
         searchPlaceholder={t("branchSwitcher.searchPlaceholder")}
         emptyText={t("branchSwitcher.empty")}

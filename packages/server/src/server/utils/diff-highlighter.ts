@@ -20,10 +20,13 @@ export interface DiffHunk {
 
 export interface ParsedDiffFile {
   path: string;
+  oldPath?: string;
   isNew: boolean;
   isDeleted: boolean;
   additions: number;
   deletions: number;
+  staged?: boolean;
+  unstaged?: boolean;
   hunks: DiffHunk[];
   status?: "ok" | "too_large" | "binary";
 }

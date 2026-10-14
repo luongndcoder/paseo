@@ -1,6 +1,13 @@
 import { useCallback, useMemo, useState } from "react";
-import { View, Text, type LayoutChangeEvent, type PressableStateCallbackType } from "react-native";
+import {
+  Pressable,
+  View,
+  Text,
+  type LayoutChangeEvent,
+  type PressableStateCallbackType,
+} from "react-native";
 import { StyleSheet } from "react-native-unistyles";
+import { Folder } from "lucide-react-native";
 import { DiffStat } from "@/components/diff-stat";
 import {
   TreeChevron,
@@ -24,6 +31,9 @@ interface DiffFolderRowProps {
   isSelected: boolean;
   additions: number;
   deletions: number;
+  fileCount?: number;
+  checkState?: "checked" | "unchecked" | "indeterminate";
+  onToggleCheck?: (dirPath: string) => void;
   onToggle: (dirPath: string) => void;
   onCollapse: (dirPath: string) => void;
   onSelect: (dirPath: string) => void;
@@ -55,6 +65,9 @@ export function DiffFolderRow({
   isSelected,
   additions,
   deletions,
+  fileCount,
+  checkState,
+  onToggleCheck,
   onToggle,
   onCollapse,
   onSelect,
@@ -154,6 +167,33 @@ export function DiffFolderRow({
             <View style={styles.chevronSlot}>
               <TreeChevron expanded={!collapsed} />
             </View>
+            {onToggleCheck ? (
+              <Pressable
+                accessibilityRole="checkbox"
+                accessibilityState={{
+                  checked:
+                    checkState === "indeterminate" ? "mixed" : checkState === "checked",
+                }}
+                onPress={(e) => {
+                  e.stopPropagation?.();
+                  onToggleCheck(dirPath);
+                }}
+                style={[
+                  styles.checkboxBox,
+                  checkState === "checked" || checkState === "indeterminate"
+                    ? styles.checkboxBoxChecked
+                    : null,
+                ]}
+                testID={testID ? `${testID}-checkbox` : undefined}
+              >
+                {checkState === "checked" ? (
+                  <Text style={styles.checkboxMark}>✓</Text>
+                ) : checkState === "indeterminate" ? (
+                  <Text style={styles.checkboxMark}>−</Text>
+                ) : null}
+              </Pressable>
+            ) : null}
+            <Folder size={13} color="#8c94a4" style={styles.folderIcon} />
             <Text
               style={[
                 styles.folderName,
@@ -167,11 +207,17 @@ export function DiffFolderRow({
             </Text>
           </View>
           <View style={styles.right}>
-            <DiffStat
-              additions={additions}
-              deletions={deletions}
-              testID={testID ? `${testID}-stat` : undefined}
-            />
+            {typeof fileCount === "number" ? (
+              <Text style={styles.fileCountText} testID={testID ? `${testID}-stat` : undefined}>
+                {fileCount} {fileCount === 1 ? "file" : "files"}
+              </Text>
+            ) : (
+              <DiffStat
+                additions={additions}
+                deletions={deletions}
+                testID={testID ? `${testID}-stat` : undefined}
+              />
+            )}
           </View>
         </ContextMenuTrigger>
         <FileActionsContextMenuContent
@@ -207,15 +253,45 @@ const styles = StyleSheet.create((theme: Theme) => ({
     alignItems: "center",
     justifyContent: "center",
   },
+  checkboxBox: {
+    width: 14,
+    height: 14,
+    borderRadius: 3,
+    borderWidth: 1,
+    borderColor: "#4e5157",
+    backgroundColor: theme.colors.surface1,
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  checkboxBoxChecked: {
+    backgroundColor: "#3574f0",
+    borderColor: "#3574f0",
+  },
+  checkboxMark: {
+    fontSize: 10,
+    fontWeight: theme.fontWeight.bold,
+    color: "#ffffff",
+    lineHeight: 11,
+  },
+  folderIcon: {
+    flexShrink: 0,
+  },
   right: {
     flexDirection: "row",
     alignItems: "center",
     flexShrink: 0,
     gap: theme.spacing[1],
+    paddingLeft: 6,
+  },
+  fileCountText: {
+    fontSize: 11,
+    color: theme.colors.foregroundMuted,
+    userSelect: "none",
   },
   folderName: {
     fontSize: theme.fontSize.base,
-    fontWeight: theme.fontWeight.normal,
+    fontWeight: theme.fontWeight.medium,
     color: theme.colors.foreground,
     flexShrink: 1,
     minWidth: 0,

@@ -15,6 +15,7 @@ interface CommitsSectionProps {
   onCommitPress: (sha: string) => void;
   collapsed?: boolean;
   onCollapsedChange?: (collapsed: boolean) => void;
+  onOpenGitLog?: () => void;
 }
 
 function CommitsSectionSkeleton() {
@@ -87,6 +88,7 @@ export function CommitsSection({
   onCommitPress,
   collapsed = true,
   onCollapsedChange,
+  onOpenGitLog,
 }: CommitsSectionProps) {
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
@@ -119,29 +121,41 @@ export function CommitsSection({
 
   return (
     <View style={containerStyle}>
-      <Pressable
-        accessibilityRole="button"
-        testID="commits-section-header"
-        onPress={handleToggleSection}
-        style={styles.header}
-      >
-        <View style={headerChevronStyle}>
-          <ThemedChevron size={14} uniProps={chevronColorMapping} />
-        </View>
-        <Text style={styles.title}>{t("workspace.git.diff.commits.title")}</Text>
-        {commitCount === null ? (
-          <View style={styles.countSpacer} />
-        ) : (
-          <Text
-            style={styles.count}
-            accessibilityLabel={t("workspace.git.diff.commits.countLabel", {
-              count: commitCount,
-            })}
+      <View style={styles.header}>
+        <Pressable
+          accessibilityRole="button"
+          testID="commits-section-header"
+          onPress={handleToggleSection}
+          style={styles.headerToggle}
+        >
+          <View style={headerChevronStyle}>
+            <ThemedChevron size={14} uniProps={chevronColorMapping} />
+          </View>
+          <Text style={styles.title}>{t("workspace.git.diff.commits.title")}</Text>
+          {commitCount === null ? (
+            <View style={styles.countSpacer} />
+          ) : (
+            <Text
+              style={styles.count}
+              accessibilityLabel={t("workspace.git.diff.commits.countLabel", {
+                count: commitCount,
+              })}
+            >
+              {commitCount}
+            </Text>
+          )}
+        </Pressable>
+        {onOpenGitLog ? (
+          <Pressable
+            accessibilityRole="button"
+            testID="commits-section-open-git-log"
+            onPress={onOpenGitLog}
+            style={styles.gitLogButton}
           >
-            {commitCount}
-          </Text>
-        )}
-      </Pressable>
+            <Text style={styles.gitLogButtonText}>Git Log (⌘9)</Text>
+          </Pressable>
+        ) : null}
+      </View>
       {collapsed ? null : <CommitsSectionContent query={query} onCommitPress={onCommitPress} />}
     </View>
   );
@@ -162,6 +176,13 @@ const styles = StyleSheet.create((theme) => ({
     paddingRight: theme.spacing[3],
     paddingVertical: theme.spacing[2],
     flexShrink: 0,
+  },
+  headerToggle: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
   },
   headerChevron: {
     width: 16,
@@ -184,6 +205,19 @@ const styles = StyleSheet.create((theme) => ({
   },
   countSpacer: {
     flex: 1,
+  },
+  gitLogButton: {
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: 2,
+    borderRadius: theme.borderRadius.sm,
+    borderWidth: theme.borderWidth[1],
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface2,
+  },
+  gitLogButtonText: {
+    fontSize: 11,
+    fontWeight: theme.fontWeight.medium,
+    color: theme.colors.foreground,
   },
   list: {
     paddingBottom: theme.spacing[1],

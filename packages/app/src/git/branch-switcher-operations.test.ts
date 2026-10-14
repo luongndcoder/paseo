@@ -41,8 +41,10 @@ describe("createBranchSwitcherOperations", () => {
     await operations.saveStash("main");
     await operations.popStash(0);
     await operations.switchBranch("feature");
+    await operations.createBranch("feature-new");
 
     expect(cwds).toEqual([
+      workspaceDirectory,
       workspaceDirectory,
       workspaceDirectory,
       workspaceDirectory,

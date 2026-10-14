@@ -27,7 +27,17 @@ import { StyleSheet, useUnistyles, withUnistyles } from "react-native-unistyles"
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { isWeb } from "@/constants/platform";
 import * as Clipboard from "expo-clipboard";
-import { ChevronDown, Eye, EyeOff, FilePlus, FolderPlus, RotateCw } from "lucide-react-native";
+import {
+  ChevronDown,
+  Eye,
+  EyeOff,
+  FilePlus,
+  FolderPlus,
+  RotateCw,
+  Search,
+  X,
+} from "lucide-react-native";
+import { describeWorkspaceFilePath } from "@/command-center/workspace-file-search-model";
 import { MaterialFileIcon } from "@/components/material-file-icon";
 import {
   TreeChevron,
@@ -60,7 +70,7 @@ import { FileActionsContextMenuContent } from "@/components/file-actions-menu";
 import { ContextMenu, ContextMenuTrigger, useContextMenu } from "@/components/ui/context-menu";
 import { useFileDownload } from "@/hooks/use-file-download";
 import { useFileExplorerActions } from "@/hooks/use-file-explorer-actions";
-import { useIsLocalDaemon } from "@/hooks/use-is-local-daemon";
+import { useIsLocalExecution } from "@/hooks/use-is-local-daemon";
 import { buildWorkspaceExplorerStateKey } from "@/hooks/use-file-explorer-actions";
 import { usePanelStore, type ExpandedPathsUpdate, type SortOption } from "@/stores/panel-store";
 import { buildAbsoluteExplorerPath } from "@/utils/explorer-paths";
@@ -126,6 +136,7 @@ interface TreeRowItemProps {
   onRenameEntry?: (entry: ExplorerEntry) => void;
   onDuplicateEntry?: (entry: ExplorerEntry) => void;
   onDeleteEntry?: (entry: ExplorerEntry) => void;
+  parentPathLabel?: string;
   testID?: string;
 }
 
@@ -137,7 +148,7 @@ function sortTriggerStyle({
 }
 
 type ExplorerListRow =
-  | { type: "entry"; row: ExplorerTreeRow }
+  | { type: "entry"; row: ExplorerTreeRow; parentPathLabel?: string }
   | { type: "draft"; parentPath: string; kind: "file" | "directory"; depth: number }
   | { type: "rename"; entry: ExplorerEntry; depth: number };
 
@@ -252,6 +263,7 @@ function TreeRowItem({
   onRenameEntry,
   onDuplicateEntry,
   onDeleteEntry,
+  parentPathLabel,
   testID,
 }: TreeRowItemProps) {
   const [isHovered, setIsHovered] = useState(false);
@@ -370,6 +382,12 @@ function TreeRowItem({
             testID={testID ? `${testID}-name` : undefined}
           >
             {entry.name}
+            {parentPathLabel ? (
+              <Text style={styles.entryParentPath}>
+                {"  "}
+                {parentPathLabel}
+              </Text>
+            ) : null}
           </Text>
         </View>
       </ContextMenuTrigger>
@@ -445,7 +463,7 @@ export function FileExplorerPane({
     workspaceRoot: normalizedWorkspaceRoot,
   });
   const toast = useToast();
-  const isLocalDaemon = useIsLocalDaemon(serverId);
+  const isLocalDaemon = useIsLocalExecution(serverId);
   const { targets: desktopOpenTargets } = useDesktopOpenTargets({
     isLocalExecution: isLocalDaemon,
   });
@@ -903,12 +921,157 @@ export function FileExplorerPane({
   );
   const currentSortLabel = resolveCurrentSortLabel(sortOption, sortLabels);
 
+  const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [remoteSearchPaths, setRemoteSearchPaths] = useState<string[]>([]);
+  const [isSearchLoading, setIsSearchLoading] = useState(false);
+
+  const trimmedSearchQuery = useMemo(() => searchQuery.trim(), [searchQuery]);
+
+  useEffect(() => {
+    setSearchQuery("");
+    setRemoteSearchPaths([]);
+    setIsSearchLoading(false);
+  }, [workspaceStateKey]);
+
+  useEffect(() => {
+    if (!trimmedSearchQuery || !client || !normalizedWorkspaceRoot) {
+      setRemoteSearchPaths([]);
+      setIsSearchLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsSearchLoading(true);
+    const timer = setTimeout(() => {
+      void client
+        .getDirectorySuggestions({
+          cwd: normalizedWorkspaceRoot,
+          query: trimmedSearchQuery,
+          includeFiles: true,
+          includeDirectories: false,
+          limit: 100,
+        })
+        .then((payload) => {
+          if (cancelled) return;
+          setRemoteSearchPaths(payload.entries.map((item) => item.path));
+          setIsSearchLoading(false);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setIsSearchLoading(false);
+        });
+    }, 100);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [client, normalizedWorkspaceRoot, trimmedSearchQuery]);
+
   const treeRows = useMemo(
     () => flattenExplorerTree({ directories, expandedPaths, sortOption, showHiddenFiles }),
     [directories, expandedPaths, showHiddenFiles, sortOption],
   );
 
+  const searchListRows = useMemo<ExplorerListRow[] | null>(() => {
+    if (!trimmedSearchQuery) {
+      return null;
+    }
+    const lowerQuery = trimmedSearchQuery.toLowerCase();
+    const isPathSearch = lowerQuery.includes("/") || lowerQuery.includes("\\");
+    const queryTokens = lowerQuery.split(/\s+/).filter(Boolean);
+
+    const matchesByFileName = (name: string): boolean => {
+      const nameLower = name.toLowerCase();
+      return queryTokens.every((token) => nameLower.includes(token));
+    };
+
+    const matchesByPath = (path: string): boolean => {
+      const pathLower = path.toLowerCase();
+      return queryTokens.every((token) => pathLower.includes(token));
+    };
+
+    const candidateByPath = new Map<string, { entry: ExplorerEntry; parentPathLabel: string }>();
+
+    for (const dir of directories.values()) {
+      for (const entry of dir.entries) {
+        if (!showHiddenFiles && isHiddenExplorerPath(entry.path)) {
+          continue;
+        }
+        if (matchesByFileName(entry.name) || matchesByPath(entry.path)) {
+          const desc = describeWorkspaceFilePath(entry.path);
+          candidateByPath.set(entry.path, {
+            entry,
+            parentPathLabel: desc.directory,
+          });
+        }
+      }
+    }
+
+    for (const rawPath of remoteSearchPaths) {
+      const desc = describeWorkspaceFilePath(rawPath);
+      if (!desc.path || candidateByPath.has(desc.path)) {
+        continue;
+      }
+      if (!showHiddenFiles && isHiddenExplorerPath(desc.path)) {
+        continue;
+      }
+      if (matchesByFileName(desc.name) || matchesByPath(desc.path)) {
+        candidateByPath.set(desc.path, {
+          entry: {
+            name: desc.name,
+            path: desc.path,
+            kind: "file",
+            size: 0,
+            modifiedAt: "",
+          },
+          parentPathLabel: desc.directory,
+        });
+      }
+    }
+
+    const allCandidates = Array.from(candidateByPath.values());
+    const fileNameMatches = isPathSearch
+      ? allCandidates
+      : allCandidates.filter((item) => matchesByFileName(item.entry.name));
+    const filteredMatches = fileNameMatches.length > 0 ? fileNameMatches : allCandidates;
+
+    const scoreEntry = (entry: ExplorerEntry): number => {
+      const nameLower = entry.name.toLowerCase();
+      if (nameLower === lowerQuery) return 0;
+      if (nameLower.startsWith(lowerQuery)) return 1;
+      if (nameLower.includes(lowerQuery)) return 2;
+      if (matchesByFileName(entry.name)) return 3;
+      return 4;
+    };
+
+    const sortedMatches = filteredMatches.sort((a, b) => {
+      const scoreDiff = scoreEntry(a.entry) - scoreEntry(b.entry);
+      if (scoreDiff !== 0) return scoreDiff;
+      if (a.entry.kind !== b.entry.kind) {
+        return a.entry.kind === "file" ? -1 : 1;
+      }
+      const nameCompare = a.entry.name.localeCompare(b.entry.name);
+      if (nameCompare !== 0) return nameCompare;
+      return a.entry.path.localeCompare(b.entry.path);
+    });
+
+    return sortedMatches.map(({ entry, parentPathLabel }) =>
+      pendingEdit?.type === "rename" && pendingEdit.entry.path === entry.path
+        ? { type: "rename", entry, depth: 0 }
+        : {
+            type: "entry",
+            row: { entry, depth: 0 },
+            parentPathLabel: parentPathLabel || undefined,
+          },
+    );
+  }, [directories, pendingEdit, remoteSearchPaths, showHiddenFiles, trimmedSearchQuery]);
+
   const listRows = useMemo<ExplorerListRow[]>(() => {
+    if (searchListRows !== null) {
+      return searchListRows;
+    }
     const rows: ExplorerListRow[] = treeRows.map((row) =>
       pendingEdit?.type === "rename" && pendingEdit.entry.path === row.entry.path
         ? { type: "rename", entry: row.entry, depth: row.depth }
@@ -933,7 +1096,7 @@ export function FileExplorerPane({
       depth,
     });
     return rows;
-  }, [pendingEdit, treeRows]);
+  }, [pendingEdit, searchListRows, treeRows]);
 
   const showInitialLoading = resolveShowInitialLoading({
     directories,
@@ -971,6 +1134,7 @@ export function FileExplorerPane({
           serverId={serverId}
           workspaceId={workspaceId}
           row={info.item.row}
+          parentPathLabel={info.item.parentPathLabel}
           index={info.index}
           expandedPaths={expandedPaths}
           selectedEntryPath={selectedEntryPath}
@@ -1063,6 +1227,9 @@ export function FileExplorerPane({
         showInitialLoading={showInitialLoading}
         showBackFromError={showBackFromError}
         listRows={listRows}
+        searchQuery={searchQuery}
+        onSearchQueryChange={setSearchQuery}
+        isSearchLoading={isSearchLoading}
         onNewEntryAtRoot={fsEntryOpsEnabled ? handleNewEntry : undefined}
         currentSortLabel={currentSortLabel}
         isRefreshFetching={isRefreshFetching}
@@ -1137,6 +1304,9 @@ interface FileExplorerPaneContentProps {
   showInitialLoading: boolean;
   showBackFromError: boolean;
   listRows: ExplorerListRow[];
+  searchQuery: string;
+  onSearchQueryChange: (value: string) => void;
+  isSearchLoading: boolean;
   onNewEntryAtRoot?: (parentPath: string, kind: "file" | "directory") => void;
   currentSortLabel: string;
   isRefreshFetching: boolean;
@@ -1160,6 +1330,9 @@ function FileExplorerPaneContent(props: FileExplorerPaneContentProps) {
     showInitialLoading,
     showBackFromError,
     listRows,
+    searchQuery,
+    onSearchQueryChange,
+    isSearchLoading,
     onNewEntryAtRoot,
     currentSortLabel,
     isRefreshFetching,
@@ -1182,13 +1355,27 @@ function FileExplorerPaneContent(props: FileExplorerPaneContentProps) {
   const handleNewFolderAtRoot = useCallback(() => {
     onNewEntryAtRoot?.(".", "directory");
   }, [onNewEntryAtRoot]);
+  const handleClearSearch = useCallback(() => {
+    onSearchQueryChange("");
+  }, [onSearchQueryChange]);
+  const handleSearchKeyPress = useCallback(
+    (event: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
+      if (event.nativeEvent.key === "Escape") {
+        onSearchQueryChange("");
+      }
+    },
+    [onSearchQueryChange],
+  );
 
   const hiddenFilesToggleAccessibilityLabel = showHiddenFiles
     ? t("workspace.fileExplorer.actions.hideHiddenFiles")
     : t("workspace.fileExplorer.actions.showHiddenFiles");
-  const emptyLabel = showHiddenFiles
-    ? t("workspace.fileExplorer.empty.noFiles")
-    : t("workspace.fileExplorer.empty.noVisibleFiles");
+  const isSearching = searchQuery.trim().length > 0;
+  const emptyLabel = isSearching
+    ? `Không tìm thấy file phù hợp với "${searchQuery.trim()}"`
+    : showHiddenFiles
+      ? t("workspace.fileExplorer.empty.noFiles")
+      : t("workspace.fileExplorer.empty.noVisibleFiles");
 
   if (error) {
     return (
@@ -1313,6 +1500,35 @@ function FileExplorerPaneContent(props: FileExplorerPaneContentProps) {
           </ToolbarButton>
         </ToolbarControls>
       </PaneContentToolbar>
+      <View style={styles.searchBarContainer}>
+        <View style={styles.searchInputWrapper}>
+          <Search size={13} color={theme.colors.foregroundMuted} />
+          <TextInput
+            value={searchQuery}
+            onChangeText={onSearchQueryChange}
+            onKeyPress={handleSearchKeyPress}
+            placeholder="Tìm file theo tên..."
+            placeholderTextColor={theme.colors.foregroundExtraMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            style={styles.searchInput}
+            testID="files-search-input"
+          />
+          {isSearchLoading ? (
+            <LoadingSpinner size={12} color={theme.colors.foregroundMuted} />
+          ) : null}
+          {searchQuery.length > 0 ? (
+            <Pressable
+              onPress={handleClearSearch}
+              hitSlop={8}
+              style={styles.searchClearButton}
+              testID="files-search-clear"
+            >
+              <X size={13} color={theme.colors.foregroundMuted} />
+            </Pressable>
+          ) : null}
+        </View>
+      </View>
       <ContextMenu>
         <RootCreationContextTarget enabled={Boolean(onNewEntryAtRoot)}>
           {listRows.length === 0 ? (
@@ -1443,6 +1659,7 @@ function TreeRowDispatcher({
   serverId,
   workspaceId,
   row,
+  parentPathLabel,
   index,
   expandedPaths,
   selectedEntryPath,
@@ -1467,6 +1684,7 @@ function TreeRowDispatcher({
   serverId: string;
   workspaceId?: string | null;
   row: ExplorerTreeRow;
+  parentPathLabel?: string;
   index: number;
   expandedPaths: Set<string>;
   selectedEntryPath: string | null;
@@ -1520,6 +1738,7 @@ function TreeRowDispatcher({
       onRenameEntry={onRenameEntry}
       onDuplicateEntry={onDuplicateEntry}
       onDeleteEntry={onDeleteEntry}
+      parentPathLabel={parentPathLabel}
       testID={`file-explorer-row-${index}`}
     />
   );
@@ -1685,6 +1904,38 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: "space-between",
     backgroundColor: theme.colors.surfaceSidebar,
   },
+  searchBarContainer: {
+    paddingHorizontal: theme.spacing[3],
+    paddingBottom: theme.spacing[2],
+    paddingTop: theme.spacing[1],
+    backgroundColor: theme.colors.surfaceSidebar,
+    borderBottomWidth: theme.borderWidth[1],
+    borderBottomColor: theme.colors.border,
+  },
+  searchInputWrapper: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+    height: 28,
+    paddingHorizontal: theme.spacing[2],
+    borderRadius: theme.borderRadius.base,
+    borderWidth: theme.borderWidth[1],
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface0,
+  },
+  searchInput: {
+    flex: 1,
+    minWidth: 0,
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+  },
+  searchClearButton: {
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 2,
+  },
   sortTrigger: {
     flexDirection: "row",
     alignItems: "center",
@@ -1779,6 +2030,11 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     color: theme.colors.foreground,
     fontSize: theme.fontSize.base,
+    userSelect: "none",
+  },
+  entryParentPath: {
+    color: theme.colors.foregroundExtraMuted,
+    fontSize: theme.fontSize.xs,
     userSelect: "none",
   },
   draftInput: {

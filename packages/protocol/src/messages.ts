@@ -2216,6 +2216,10 @@ export const CheckoutCommitRequestSchema = z.object({
   cwd: z.string(),
   message: z.string().optional(),
   addAll: z.boolean().optional(),
+  paths: z.array(z.string()).optional(),
+  amend: z.boolean().optional(),
+  push: z.boolean().optional(),
+  generateMessageOnly: z.boolean().optional(),
   requestId: z.string(),
 });
 
@@ -2258,6 +2262,7 @@ export const CheckoutDiscardChangesRequestSchema = z.object({
   type: z.literal("checkout.discard_changes.request"),
   cwd: z.string(),
   paths: z.array(z.string()).min(1),
+  action: z.enum(["discard", "stage", "unstage"]).optional(),
   requestId: z.string(),
 });
 
@@ -2308,16 +2313,122 @@ const CheckoutCommitSchema = z.object({
   shortSha: z.string(),
   subject: z.string(),
   authorName: z.string(),
+  authorEmail: z.string().optional(),
   authorDate: z.string(), // ISO 8601
+  body: z.string().optional(),
+  parents: z.array(z.string()).optional(),
+  refs: z.array(z.string()).optional(),
   isOnRemote: z.boolean(), // false = local-only (unpushed)
   // COMPAT(commitBaseClassification): added in v0.2.0, remove optional after 2027-01-23.
   isOnBase: z.boolean().optional(),
   files: z.array(CheckoutCommitFileSchema),
 });
 
+export const CheckoutGitLogActionSchema = z.object({
+  kind: z.enum([
+    "cherry-pick",
+    "revert",
+    "reset",
+    "checkout-ref",
+    "create-branch",
+    "delete-branch",
+    "merge-ref",
+    "rebase-onto",
+    "create-tag",
+    "delete-tag",
+    "reword-commit",
+    "squash-commit",
+    "drop-commit",
+    "stash-create",
+    "stash-apply",
+    "stash-pop",
+    "stash-drop",
+    "stash-branch",
+    "apply-hunk-patch",
+    "resolve-conflict",
+    "abort-operation",
+    "continue-operation",
+  ]),
+  target: z.string(),
+  secondTarget: z.string().optional(),
+  mode: z.enum(["soft", "mixed", "hard"]).optional(),
+  force: z.boolean().optional(),
+  message: z.string().optional(),
+  patch: z.string().optional(),
+  patchMode: z.enum(["rollback", "stage"]).optional(),
+  content: z.string().optional(),
+});
+
+export const CheckoutGitBranchNodeSchema = z.object({
+  name: z.string(),
+  sha: z.string(),
+  isCurrent: z.boolean(),
+  upstream: z.string().nullable().optional(),
+  ahead: z.number().optional(),
+  behind: z.number().optional(),
+});
+
+export const CheckoutGitRemoteBranchNodeSchema = z.object({
+  name: z.string(),
+  sha: z.string(),
+  remote: z.string(),
+});
+
+export const CheckoutGitTagNodeSchema = z.object({
+  name: z.string(),
+  sha: z.string(),
+  date: z.string().optional(),
+});
+
+export const CheckoutGitBlameLineSchema = z.object({
+  lineNumber: z.number(),
+  sha: z.string(),
+  shortSha: z.string(),
+  author: z.string(),
+  authorTime: z.number(),
+  summary: z.string(),
+  content: z.string(),
+});
+
+export const CheckoutGitStashNodeSchema = z.object({
+  index: z.number(),
+  ref: z.string(), // e.g. "stash@{0}"
+  branch: z.string().nullable().optional(),
+  message: z.string(),
+  date: z.string(),
+  sha: z.string(),
+});
+
+export const CheckoutGitConflictStateSchema = z.object({
+  inProgress: z.enum(["merge", "rebase", "cherry-pick", "conflict"]).nullable(),
+  conflictFiles: z.array(z.string()),
+});
+
+export const CheckoutGitConflictFilePayloadSchema = z.object({
+  path: z.string(),
+  baseContent: z.string(),
+  oursContent: z.string(),
+  theirsContent: z.string(),
+  workingContent: z.string(),
+  oursLabel: z.string(),
+  theirsLabel: z.string(),
+});
+
 export const CheckoutCommitsListRequestSchema = z.object({
   type: z.literal("checkout.commits.list.request"),
   cwd: z.string(),
+  includeGraph: z.boolean().optional(),
+  allBranches: z.boolean().optional(),
+  ref: z.string().optional(),
+  search: z.string().optional(),
+  author: z.string().optional(),
+  filePath: z.string().optional(),
+  limit: z.number().int().min(1).max(500).optional(),
+  blamePath: z.string().optional(),
+  gitAction: CheckoutGitLogActionSchema.optional(),
+  conflictFilePath: z.string().optional(),
+  stashIndex: z.number().int().min(0).optional(),
+  compareRef: z.string().optional(),
   requestId: z.string(),
 });
 
@@ -2390,6 +2501,7 @@ export const CheckoutSwitchBranchRequestSchema = z.object({
   type: z.literal("checkout_switch_branch_request"),
   cwd: z.string(),
   branch: z.string(),
+  create: z.boolean().optional(),
   requestId: z.string(),
 });
 
@@ -2405,6 +2517,8 @@ export const StashSaveRequestSchema = z.object({
   cwd: z.string(),
   /** Branch name to tag the stash with for later identification. */
   branch: z.string().optional(),
+  /** Optional custom stash message. */
+  message: z.string().optional(),
   requestId: z.string(),
 });
 
@@ -2413,6 +2527,7 @@ export const StashPopRequestSchema = z.object({
   cwd: z.string(),
   /** Zero-based index from stash_list_response. */
   stashIndex: z.number().int().min(0),
+  action: z.enum(["pop", "apply", "drop"]).optional(),
   requestId: z.string(),
 });
 
@@ -2725,6 +2840,8 @@ const ParsedDiffFileSchema = z.object({
   deletions: z.number(),
   hunks: z.array(DiffHunkSchema),
   status: z.enum(["ok", "too_large", "binary"]).optional(),
+  staged: z.boolean().optional(),
+  unstaged: z.boolean().optional(),
 });
 
 const FileExplorerEntrySchema = z.object({
@@ -5446,6 +5563,7 @@ export const CheckoutCommitResponseSchema = z.object({
   payload: z.object({
     cwd: z.string(),
     success: z.boolean(),
+    generatedMessage: z.string().optional(),
     error: CheckoutErrorSchema.nullable(),
     requestId: z.string(),
   }),
@@ -5557,12 +5675,36 @@ export const CheckoutDiscardChangesResponseSchema = z.object({
   }),
 });
 
+export const CheckoutGitDiffDetailSchema = z.object({
+  label: z.string(),
+  files: z.array(CheckoutCommitFileSchema),
+  diffs: z.array(ParsedDiffFileSchema),
+});
+
 export const CheckoutCommitsListResponseSchema = z.object({
   type: z.literal("checkout.commits.list.response"),
   payload: z.object({
     cwd: z.string(),
     baseRef: z.string().nullable(),
     commits: z.array(CheckoutCommitSchema),
+    headSha: z.string().nullable().optional(),
+    currentBranch: z.string().nullable().optional(),
+    lastCommitMessage: z.string().nullable().optional(),
+    branches: z.array(CheckoutGitBranchNodeSchema).optional(),
+    remoteBranches: z.array(CheckoutGitRemoteBranchNodeSchema).optional(),
+    tags: z.array(CheckoutGitTagNodeSchema).optional(),
+    stashes: z.array(CheckoutGitStashNodeSchema).optional(),
+    conflictState: CheckoutGitConflictStateSchema.optional(),
+    conflictFile: CheckoutGitConflictFilePayloadSchema.nullable().optional(),
+    stashDetail: CheckoutGitDiffDetailSchema.nullable().optional(),
+    compareDetail: CheckoutGitDiffDetailSchema.nullable().optional(),
+    blameLines: z.array(CheckoutGitBlameLineSchema).optional(),
+    actionResult: z
+      .object({
+        success: z.boolean(),
+        message: z.string().optional(),
+      })
+      .optional(),
     error: CheckoutErrorSchema.nullable(),
     requestId: z.string(),
   }),
@@ -7354,6 +7496,15 @@ export type CheckoutDiscardChangesRequest = z.infer<typeof CheckoutDiscardChange
 export type CheckoutDiscardChangesResponse = z.infer<typeof CheckoutDiscardChangesResponseSchema>;
 export type CheckoutCommitFile = z.infer<typeof CheckoutCommitFileSchema>;
 export type CheckoutCommit = z.infer<typeof CheckoutCommitSchema>;
+export type CheckoutGitLogAction = z.infer<typeof CheckoutGitLogActionSchema>;
+export type CheckoutGitBranchNode = z.infer<typeof CheckoutGitBranchNodeSchema>;
+export type CheckoutGitRemoteBranchNode = z.infer<typeof CheckoutGitRemoteBranchNodeSchema>;
+export type CheckoutGitTagNode = z.infer<typeof CheckoutGitTagNodeSchema>;
+export type CheckoutGitBlameLine = z.infer<typeof CheckoutGitBlameLineSchema>;
+export type CheckoutGitStashNode = z.infer<typeof CheckoutGitStashNodeSchema>;
+export type CheckoutGitConflictState = z.infer<typeof CheckoutGitConflictStateSchema>;
+export type CheckoutGitConflictFilePayload = z.infer<typeof CheckoutGitConflictFilePayloadSchema>;
+export type CheckoutGitDiffDetail = z.infer<typeof CheckoutGitDiffDetailSchema>;
 export type CheckoutCommitsListRequest = z.infer<typeof CheckoutCommitsListRequestSchema>;
 export type CheckoutCommitsListResponse = z.infer<typeof CheckoutCommitsListResponseSchema>;
 export type CheckoutCommitFileDiffRequest = z.infer<typeof CheckoutCommitFileDiffRequestSchema>;
