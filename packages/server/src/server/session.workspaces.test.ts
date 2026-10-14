@@ -5863,7 +5863,7 @@ test.skip("open_project_request collapses a git subdirectory onto the repo root 
   expect(response?.payload.workspace?.id).toBe(repoRoot);
 });
 
-test("legacy editor RPC requests return daemon unsupported errors", async () => {
+test("editor RPC requests list available local targets and validate path on open", async () => {
   const emitted: SessionOutboundMessage[] = [];
   const session = createSessionForWorkspaceTests({
     onMessage: (message) => emitted.push(message),
@@ -5877,18 +5877,14 @@ test("legacy editor RPC requests return daemon unsupported errors", async () => 
     type: "open_in_editor_request",
     requestId: "req-open-editor",
     editorId: "vscode",
-    path: REPO_CWD,
+    path: "/nonexistent/paseo-missing-path",
   });
 
   const listResponse = findByType(emitted, "list_available_editors_response");
   const openResponse = findByType(emitted, "open_in_editor_response");
-  expect(listResponse?.payload.editors).toEqual([]);
-  expect(listResponse?.payload.error).toBe(
-    "Editor opening moved to the desktop app and is no longer supported by the daemon",
-  );
-  expect(openResponse?.payload.error).toBe(
-    "Editor opening moved to the desktop app and is no longer supported by the daemon",
-  );
+  expect(listResponse?.payload.error).toBeNull();
+  expect(listResponse?.payload.editors.length).toBeGreaterThan(0);
+  expect(openResponse?.payload.error).toContain("Path does not exist");
 });
 
 test("archive_workspace_request hides non-destructive workspace records", async () => {

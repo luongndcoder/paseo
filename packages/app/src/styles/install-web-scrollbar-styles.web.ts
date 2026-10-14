@@ -49,6 +49,10 @@ export function installWebScrollbarStyles(): () => void {
 [data-overlay-scrollbar="true"]::-webkit-scrollbar {
   display: none;
 }
+
+svg:not([fill]) {
+  fill: none;
+}
 `;
   document.head.append(style);
 

@@ -1,5 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
+import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import { isWeb } from "@/constants/platform";
 import { getDesktopHost, type DesktopEditorBridge } from "@/desktop/host";
+import { useSessionStore } from "@/stores/session-store";
 
 export type DesktopOpenTargetKind = "editor" | "file-manager";
 export type DesktopOpenTargetIcon =
@@ -38,7 +41,12 @@ export function selectDesktopOpenTargets({
   if (!canListTargets) {
     return [];
   }
-  return targets ?? [];
+  return (targets ?? []).filter(
+    (target) =>
+      target.kind === "file-manager" ||
+      isFileManagerEditorId(target.id) ||
+      target.id === "vscode",
+  );
 }
 
 function getDesktopEditorBridge(): AvailableDesktopEditorBridge | null {
@@ -52,31 +60,99 @@ function getDesktopEditorBridge(): AvailableDesktopEditorBridge | null {
   };
 }
 
+function getActiveDaemonClient(): DaemonClient | null {
+  if (!isWeb) {
+    return null;
+  }
+  const sessions = Object.values(useSessionStore.getState().sessions);
+  for (const session of sessions) {
+    if (session?.client) {
+      return session.client;
+    }
+  }
+  return null;
+}
+
+function isFileManagerEditorId(editorId: string): boolean {
+  return editorId === "finder" || editorId === "explorer" || editorId === "file-manager";
+}
+
 export function hasDesktopOpenTargetsBridge(): boolean {
   return getDesktopEditorBridge() !== null;
 }
 
 export async function listDesktopOpenTargets(): Promise<DesktopOpenTarget[]> {
   const bridge = getDesktopEditorBridge();
-  if (!bridge) {
+  if (bridge) {
+    return await bridge.listTargets();
+  }
+  const client = getActiveDaemonClient();
+  if (!client) {
     return [];
   }
-  return await bridge.listTargets();
+  const response = await client.listAvailableEditors();
+  if (response.error) {
+    return [];
+  }
+  return response.editors.map((editor) => {
+    const isFileManager = isFileManagerEditorId(editor.id);
+    return {
+      id: editor.id,
+      label: editor.label,
+      kind: isFileManager ? "file-manager" : "editor",
+      icon: {
+        kind: "symbol",
+        name: isFileManager ? "folder" : "terminal",
+      },
+    };
+  });
+}
+
+function formatOpenTargetPath(input: OpenDesktopTargetInput, isFileManager: boolean): string {
+  if (!input.filePath) {
+    return input.workspacePath;
+  }
+  if (isFileManager || !input.line) {
+    return input.filePath;
+  }
+  if (input.column) {
+    return `${input.filePath}:${input.line}:${input.column}`;
+  }
+  return `${input.filePath}:${input.line}`;
 }
 
 export async function openDesktopTarget(input: OpenDesktopTargetInput): Promise<void> {
   const bridge = getDesktopEditorBridge();
-  if (!bridge) {
+  if (bridge) {
+    await bridge.openTarget(input);
+    return;
+  }
+  const client = getActiveDaemonClient();
+  if (!client) {
     throw new Error("Desktop editor bridge is unavailable");
   }
-  await bridge.openTarget(input);
+  const isFileManager = isFileManagerEditorId(input.editorId);
+  const pathWithLocation = formatOpenTargetPath(input, isFileManager);
+  const response = await client.openInEditor({
+    editorId: input.editorId,
+    path: pathWithLocation,
+    cwd: input.workspacePath,
+    mode: isFileManager && input.filePath ? "reveal" : "open",
+  });
+  if (response.error) {
+    throw new Error(response.error);
+  }
 }
 
 export function useDesktopOpenTargets(input: { isLocalExecution: boolean }) {
   const hasBridge = hasDesktopOpenTargetsBridge();
-  const canListTargets = hasBridge && input.isLocalExecution;
+  const hasConnectedSessionClient = useSessionStore((state) =>
+    Object.values(state.sessions).some((session) => Boolean(session?.client)),
+  );
+  const canListTargets =
+    (hasBridge || (isWeb && hasConnectedSessionClient)) && input.isLocalExecution;
   const query = useQuery({
-    queryKey: ["desktop-open-targets"],
+    queryKey: ["desktop-open-targets", hasBridge ? "bridge" : "daemon"],
     enabled: canListTargets,
     staleTime: 60_000,
     retry: false,

@@ -73,6 +73,10 @@ import type { ScriptHealthState } from "./script-health-monitor.js";
 import { spawnWorkspaceScript } from "./worktree-bootstrap.js";
 import type { WorkspaceScriptRuntimeStore } from "./workspace-script-runtime-store.js";
 import {
+  listLocalDaemonEditorTargets,
+  openInLocalDaemonEditorTarget,
+} from "./local-editor-targets.js";
+import {
   createWorkspaceScriptsService,
   type WorkspaceScriptsService,
 } from "./session/workspace-scripts/workspace-scripts-service.js";
@@ -7298,30 +7302,57 @@ export class Session {
     }
   }
 
-  // COMPAT(desktopEditorBridge): added in v0.1.88, remove after 2026-12-03 once old clients no longer call daemon editor RPCs.
   private async handleLegacyListAvailableEditorsRequest(
     request: Extract<SessionInboundMessage, { type: "list_available_editors_request" }>,
   ): Promise<void> {
-    this.emit({
-      type: "list_available_editors_response",
-      payload: {
-        requestId: request.requestId,
-        editors: [],
-        error: "Editor opening moved to the desktop app and is no longer supported by the daemon",
-      },
-    });
+    try {
+      const editors = listLocalDaemonEditorTargets();
+      this.emit({
+        type: "list_available_editors_response",
+        payload: {
+          requestId: request.requestId,
+          editors,
+          error: null,
+        },
+      });
+    } catch (error) {
+      this.emit({
+        type: "list_available_editors_response",
+        payload: {
+          requestId: request.requestId,
+          editors: [],
+          error: error instanceof Error ? error.message : "Failed to list available editors",
+        },
+      });
+    }
   }
 
   private async handleLegacyOpenInEditorRequest(
     request: Extract<SessionInboundMessage, { type: "open_in_editor_request" }>,
   ): Promise<void> {
-    this.emit({
-      type: "open_in_editor_response",
-      payload: {
-        requestId: request.requestId,
-        error: "Editor opening moved to the desktop app and is no longer supported by the daemon",
-      },
-    });
+    try {
+      await openInLocalDaemonEditorTarget({
+        editorId: request.editorId,
+        path: request.path,
+        ...(request.cwd ? { cwd: request.cwd } : {}),
+        ...(request.mode ? { mode: request.mode } : {}),
+      });
+      this.emit({
+        type: "open_in_editor_response",
+        payload: {
+          requestId: request.requestId,
+          error: null,
+        },
+      });
+    } catch (error) {
+      this.emit({
+        type: "open_in_editor_response",
+        payload: {
+          requestId: request.requestId,
+          error: error instanceof Error ? error.message : "Failed to open in editor",
+        },
+      });
+    }
   }
 
   private async handleCreatePaseoWorktreeRequest(

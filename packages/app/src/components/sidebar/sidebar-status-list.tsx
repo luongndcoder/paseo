@@ -24,6 +24,7 @@ import { type SidebarWorkspaceEntry } from "@/hooks/use-sidebar-workspaces-list"
 import type { StatusBucket } from "@/hooks/sidebar-status-view-model";
 import type { SidebarWorkspaceGroup } from "@/components/sidebar/sidebar-labels";
 import { SidebarFilterEmptyState } from "@/components/sidebar/empty-states";
+import { SidebarWorkspaceSubagentTree } from "@/components/sidebar/sidebar-workspace-agent-tree";
 import type { HostBadgeModel } from "@/hosts/appearance";
 import { isWeb as platformIsWeb, isNative as platformIsNative } from "@/constants/platform";
 import { useIsCompactFormFactor } from "@/constants/layout";
@@ -929,6 +930,7 @@ function StatusWorkspaceRowInnerContent({
                 ) : null}
               </SidebarWorkspaceRowContent>
             </SidebarWorkspaceContextMenu>
+            <SidebarWorkspaceSubagentTree workspace={workspace} inStatusGroup={inStatusGroup} />
           </View>
         );
       }}

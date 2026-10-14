@@ -1,5 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
+import { isWeb } from "@/constants/platform";
 import { getDesktopDaemonStatus, shouldUseDesktopDaemon } from "@/desktop/daemon/desktop-daemon";
+import { useSessionStore } from "@/stores/session-store";
 
 const DESKTOP_DAEMON_SERVER_ID_QUERY_KEY = ["desktop-daemon-server-id"] as const;
 
@@ -73,4 +75,40 @@ export function useIsLocalDaemon(serverId: string): boolean {
   }
 
   return localServerId === normalizedServerId;
+}
+
+export function isLoopbackEndpoint(endpoint: string): boolean {
+  const trimmed = endpoint.trim().toLowerCase();
+  return (
+    trimmed === "localhost" ||
+    trimmed.startsWith("localhost:") ||
+    trimmed === "127.0.0.1" ||
+    trimmed.startsWith("127.0.0.1:") ||
+    trimmed === "[::1]" ||
+    trimmed.startsWith("[::1]:") ||
+    trimmed === "::1"
+  );
+}
+
+export function useIsLocalExecution(serverId: string): boolean {
+  const isDesktopDaemon = useIsLocalDaemon(serverId);
+  const normalizedServerId = serverId.trim();
+  const hasSessionClient = useSessionStore((state) =>
+    normalizedServerId.length > 0 ? Boolean(state.sessions[normalizedServerId]?.client) : false,
+  );
+
+  if (isDesktopDaemon) {
+    return true;
+  }
+  if (!isWeb || normalizedServerId.length === 0) {
+    return false;
+  }
+  if (
+    hasSessionClient &&
+    typeof window !== "undefined" &&
+    isLoopbackEndpoint(window.location.hostname)
+  ) {
+    return true;
+  }
+  return false;
 }

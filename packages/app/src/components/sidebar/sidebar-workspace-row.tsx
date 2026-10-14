@@ -34,6 +34,7 @@ import {
 } from "@/components/sidebar/sidebar-workspace-row-content";
 import { useOpenKebabMenuVisibility } from "@/components/sidebar/use-open-kebab-menu-visibility";
 import { getSidebarRowBackdrop } from "@/components/sidebar/sidebar-row-backdrop";
+import { SidebarWorkspaceSubagentTree } from "@/components/sidebar/sidebar-workspace-agent-tree";
 import { selectWorkspaceServiceSummary } from "@/components/sidebar/workspace-meta-row";
 import {
   SidebarWorkspaceTrailingContent,
@@ -355,6 +356,7 @@ function WorkspaceRowBody({
                 />
               </SidebarWorkspaceRowContent>
             </SidebarWorkspaceContextMenu>
+            <SidebarWorkspaceSubagentTree workspace={workspace} />
           </View>
         );
       }}

@@ -18,7 +18,7 @@ export function SvgPathIcon({
 }: SvgPathIconInput) {
   return (
     <Svg width={size} height={size} viewBox={viewBox} fill={color}>
-      <Path d={path} />
+      <Path d={path} fill={color} />
     </Svg>
   );
 }

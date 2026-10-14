@@ -105,6 +105,7 @@ import {
   SidebarWorkspaceTrailingActionOverlay,
   SidebarWorkspaceTrailingActionSlot,
 } from "@/components/sidebar/sidebar-workspace-row-content";
+import { SidebarWorkspaceSubagentTree } from "@/components/sidebar/sidebar-workspace-agent-tree";
 import { useOpenKebabMenuVisibility } from "@/components/sidebar/use-open-kebab-menu-visibility";
 import {
   SidebarFilterEmptyState,
@@ -1199,6 +1200,7 @@ function WorkspaceRowInner({
                 />
               </SidebarWorkspaceRowContent>
             </SidebarWorkspaceContextMenu>
+            <SidebarWorkspaceSubagentTree workspace={workspace} />
           </View>
         );
       }}

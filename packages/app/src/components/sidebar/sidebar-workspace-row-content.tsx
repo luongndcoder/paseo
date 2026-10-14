@@ -8,6 +8,7 @@ import {
   WorkspaceMetaRow,
   type WorkspaceServiceSummary,
 } from "@/components/sidebar/workspace-meta-row";
+import { WorkspaceAgentMetaRow } from "@/components/sidebar/sidebar-workspace-agent-tree";
 import { WorkspaceHoverCard } from "@/components/workspace-hover-card";
 import type { HostBadgeModel } from "@/hosts/appearance";
 import type { SidebarWorkspaceEntry } from "@/hooks/use-sidebar-workspaces-list";
@@ -168,6 +169,12 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
             prHint={workspace.prHint}
             serviceSummary={serviceSummary}
             labels={labels}
+          />
+          <WorkspaceAgentMetaRow
+            serverId={workspace.serverId}
+            workspaceId={workspace.workspaceId}
+            workspaceDirectory={workspace.workspaceDirectory}
+            workspaceKey={workspace.workspaceKey}
           />
         </View>
       </View>

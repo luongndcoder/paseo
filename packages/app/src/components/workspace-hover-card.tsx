@@ -39,6 +39,13 @@ import {
 import { formatCheckPresentationCountsLabel } from "@/git/check-presentation-copy";
 import { CheckPresentationIcon, getCheckPresentationTone } from "@/git/check-presentation.view";
 import { buildForgeChecksUrl } from "@/git/forge-url";
+import { useProviderIcons } from "@/components/provider-icons";
+import {
+  getProviderAccentTone,
+  resolveBuiltinProviderIcon,
+  useWorkspaceAgentSidebarSummary,
+} from "@/components/sidebar/sidebar-workspace-agent-tree";
+import { GitFork } from "lucide-react-native";
 
 const HOVER_CARD_WIDTH = 260;
 
@@ -94,6 +101,12 @@ function WorkspaceHoverCardContent({
           {workspace.name}
         </Text>
       </View>
+      <AgentProviderHoverRows
+        serverId={workspace.serverId}
+        workspaceId={workspace.workspaceId}
+        workspaceDirectory={workspace.workspaceDirectory}
+        workspaceKey={workspace.workspaceKey}
+      />
       {prHint ? <PrBadge hint={prHint} style={styles.cardInfoRow} /> : null}
       {workspace.diffStat ? (
         <View style={styles.cardInfoRow}>
@@ -128,6 +141,62 @@ function WorkspaceHoverCardContent({
           <View style={styles.separator} />
           <ChecksSummaryPressable checks={prHint.checks} url={prHint.url} forge={prHint.forge} />
         </>
+      ) : null}
+    </>
+  );
+}
+
+function AgentProviderHoverRows({
+  serverId,
+  workspaceId,
+  workspaceDirectory,
+  workspaceKey,
+}: {
+  serverId: string;
+  workspaceId: string;
+  workspaceDirectory?: string | null;
+  workspaceKey?: string;
+}): ReactElement | null {
+  const summary = useWorkspaceAgentSidebarSummary(
+    serverId,
+    workspaceId,
+    workspaceDirectory,
+    workspaceKey,
+  );
+  const getProviderIcon = useProviderIcons(serverId);
+  if (!summary.primaryAgent && summary.subagents.length === 0) {
+    return null;
+  }
+  const primary = summary.primaryAgent;
+  const tone = primary ? getProviderAccentTone(primary.provider) : getProviderAccentTone("default");
+  const ProviderIcon = primary
+    ? resolveBuiltinProviderIcon(primary.provider, getProviderIcon)
+    : null;
+  const modelText = primary?.modelFull ?? primary?.modelShort ?? null;
+
+  return (
+    <>
+      {primary && ProviderIcon ? (
+        <View style={styles.cardInfoRow} testID="hover-card-workspace-agent-provider">
+          <ProviderIcon size={13} color={tone.text} />
+          <Text style={[styles.cardInfoText, { color: tone.text }]} numberOfLines={1}>
+            {primary.providerLabel}
+            {modelText ? ` · ${modelText}` : ""}
+          </Text>
+        </View>
+      ) : null}
+      {summary.subagents.length > 0 ? (
+        <View style={styles.cardInfoRow} testID="hover-card-workspace-subagents">
+          <GitFork size={12} color={summary.runningSubagentCount > 0 ? "#10b981" : "#94a3b8"} />
+          <Text style={styles.cardInfoText} numberOfLines={1}>
+            {summary.subagents.length === 1
+              ? "1 subagent"
+              : `${summary.subagents.length} subagents`}
+            {summary.runningSubagentCount > 0
+              ? ` (${summary.runningSubagentCount} running)`
+              : ""}
+          </Text>
+        </View>
       ) : null}
     </>
   );

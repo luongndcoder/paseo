@@ -4,7 +4,7 @@ import { FolderOpen } from "lucide-react-native";
 import { withUnistyles } from "react-native-unistyles";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { ContextMenuItem } from "@/components/ui/context-menu";
-import { getIsElectron } from "@/constants/platform";
+import { isWeb } from "@/constants/platform";
 import { useToast } from "@/contexts/toast-context";
 import type { Theme } from "@/styles/theme";
 import { openDesktopTarget, useDesktopOpenTargets } from "@/workspace/desktop-open-targets";
@@ -30,10 +30,9 @@ export function OpenInFileManagerMenuItem({
 }: OpenInFileManagerMenuItemProps) {
   const { t } = useTranslation();
   const toast = useToast();
-  const isElectron = getIsElectron();
   const workspacePath = path?.trim() ?? "";
   const { targets } = useDesktopOpenTargets({
-    isLocalExecution: isElectron && workspacePath.length > 0,
+    isLocalExecution: isWeb && workspacePath.length > 0,
   });
   const fileManagerTarget = targets.find((target) => target.kind === "file-manager");
 
@@ -48,7 +47,7 @@ export function OpenInFileManagerMenuItem({
     });
   }, [fileManagerTarget, t, toast, workspacePath]);
 
-  if (!isElectron || !fileManagerTarget || workspacePath.length === 0) {
+  if (!isWeb || !fileManagerTarget || workspacePath.length === 0) {
     return null;
   }
 

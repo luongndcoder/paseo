@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useToast } from "@/contexts/toast-context";
-import { useIsLocalDaemon } from "@/hooks/use-is-local-daemon";
+import { useIsLocalExecution } from "@/hooks/use-is-local-daemon";
 import { resolvePreferredEditorId, usePreferredEditor } from "@/hooks/use-preferred-editor";
 import { openDesktopTarget, useDesktopOpenTargets } from "@/workspace/desktop-open-targets";
 import { planWorkspaceOpenTargets } from "@/workspace/open-in-editor/planner";
@@ -22,7 +22,7 @@ export function useOpenDirectoryInEditor({
 }: UseOpenDirectoryInEditorInput): OpenDirectoryInEditorAction | null {
   const { t } = useTranslation();
   const toast = useToast();
-  const isLocalExecution = useIsLocalDaemon(serverId);
+  const isLocalExecution = useIsLocalExecution(serverId);
   const { preferredEditorId } = usePreferredEditor();
   const { targets, isAvailable } = useDesktopOpenTargets({ isLocalExecution });
   const editorTargets = useMemo(

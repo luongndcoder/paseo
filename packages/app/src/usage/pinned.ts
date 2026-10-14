@@ -21,6 +21,7 @@ export interface PinnedUsageWindow {
 export interface PinnedUsageSource {
   key: string;
   icon: string | null;
+  accountBadge?: string;
   windows: PinnedUsageWindow[];
 }
 
