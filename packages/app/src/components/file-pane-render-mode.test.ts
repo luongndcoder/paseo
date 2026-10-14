@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { filePreviewRenderKind, isRenderedMarkdownFile } from "@/components/file-pane-render-mode";
+import {
+  filePreviewRenderKind,
+  isRenderedMarkdownFile,
+  plantUmlFileAsMarkdown,
+} from "@/components/file-pane-render-mode";
 
 describe("isRenderedMarkdownFile", () => {
   it("detects .md files", () => {
@@ -30,11 +34,28 @@ describe("filePreviewRenderKind", () => {
     expect(filePreviewRenderKind("plan.html")).toBe("html");
     expect(filePreviewRenderKind("docs/PLAN.HTML")).toBe("html");
     expect(filePreviewRenderKind("plan.htm")).toBe("html");
+    expect(filePreviewRenderKind("diagrams/01-c4-l1.puml")).toBe("plantuml");
+    expect(filePreviewRenderKind("flow.PLANTUML")).toBe("plantuml");
+    expect(filePreviewRenderKind("seq.pu")).toBe("plantuml");
   });
 
   it("returns null for files without a rendered preview", () => {
     expect(filePreviewRenderKind("src/index.ts")).toBe(null);
     expect(filePreviewRenderKind("page.mdx")).toBe(null);
     expect(filePreviewRenderKind("index.html.erb")).toBe(null);
+  });
+});
+
+describe("plantUmlFileAsMarkdown", () => {
+  it("wraps the file in a plantuml fence", () => {
+    expect(plantUmlFileAsMarkdown("@startuml\nA -> B\n@enduml")).toBe(
+      "```plantuml\n@startuml\nA -> B\n@enduml\n```\n",
+    );
+  });
+
+  it("uses a fence longer than any backtick run in the file", () => {
+    expect(plantUmlFileAsMarkdown("note: ```code```")).toBe(
+      "````plantuml\nnote: ```code```\n````\n",
+    );
   });
 });
