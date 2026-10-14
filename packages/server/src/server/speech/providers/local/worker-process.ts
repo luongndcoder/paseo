@@ -7,6 +7,7 @@ import { SherpaOfflineRecognizerEngine } from "./sherpa/sherpa-offline-recognize
 import { SherpaOnnxParakeetSTT } from "./sherpa/sherpa-parakeet-stt.js";
 import { SherpaParakeetRealtimeTranscriptionSession } from "./sherpa/sherpa-parakeet-realtime-session.js";
 import { SherpaOnnxTTS } from "./sherpa/sherpa-tts.js";
+import { getVietnameseDictationModelDirectory } from "./sherpa/vietnamese-model.js";
 import {
   ensureSileroVadModel,
   SherpaSileroTurnDetectionProvider,
@@ -59,8 +60,13 @@ function ttsModelId(config: LocalSpeechWorkerConfig): LocalTtsModelId {
   return config.voiceTtsModel as LocalTtsModelId;
 }
 
-function sttEngineKey(config: LocalSpeechWorkerConfig, modelId: LocalSttModelId): string {
-  return `${config.modelsDir}:${modelId}`;
+function usesVietnameseDictationModel(
+  config: LocalSpeechWorkerConfig,
+  model: "voice" | "dictation",
+): boolean {
+  // WHY: the existing local dictation language setting is the selector, so this model stays
+  // internal and does not expand the public model-id config schema.
+  return model === "dictation" && /^vi(?:-|$)/i.test(config.dictationLanguage ?? "");
 }
 
 function ttsKey(config: LocalSpeechWorkerConfig): string {
@@ -72,28 +78,42 @@ function ttsKey(config: LocalSpeechWorkerConfig): string {
   ].join(":");
 }
 
+function sttEngineKey(
+  config: LocalSpeechWorkerConfig,
+  model: "voice" | "dictation",
+  modelId: LocalSttModelId,
+): string {
+  return usesVietnameseDictationModel(config, model)
+    ? `${config.modelsDir}:zipformer-vi-30m-int8`
+    : `${config.modelsDir}:${modelId}`;
+}
+
 function getSttEngine(
   config: LocalSpeechWorkerConfig,
   model: "voice" | "dictation",
 ): LocalSttEngine {
   const modelId = sttModelId(config, model);
-  const key = sttEngineKey(config, modelId);
+  const vietnamese = usesVietnameseDictationModel(config, model);
+  const key = sttEngineKey(config, model, modelId);
   const existing = sttEngines.get(key);
   if (existing) {
     return existing;
   }
-  const modelDir = getLocalSpeechModelDir(config.modelsDir, modelId);
+  const modelDir = vietnamese
+    ? getVietnameseDictationModelDirectory(config.modelsDir)
+    : getLocalSpeechModelDir(config.modelsDir, modelId);
   const created = new SherpaOfflineRecognizerEngine(
     {
       model: {
-        kind: "nemo_transducer",
+        kind: vietnamese ? "transducer" : "nemo_transducer",
         encoder: `${modelDir}/encoder.int8.onnx`,
-        decoder: `${modelDir}/decoder.int8.onnx`,
+        decoder: `${modelDir}/${vietnamese ? "decoder.onnx" : "decoder.int8.onnx"}`,
         joiner: `${modelDir}/joiner.int8.onnx`,
         tokens: `${modelDir}/tokens.txt`,
       },
       numThreads: 2,
       debug: 0,
+      ...(vietnamese ? { uppercaseVocabulary: true, textLocale: "vi" } : {}),
     },
     logger,
   );
@@ -106,7 +126,7 @@ function getSttProvider(
   model: "voice" | "dictation",
 ): SherpaOnnxParakeetSTT {
   const modelId = sttModelId(config, model);
-  const key = sttEngineKey(config, modelId);
+  const key = sttEngineKey(config, model, modelId);
   const existing = sttProviders.get(key);
   if (existing) {
     return existing;

@@ -31,19 +31,20 @@ Missing models are downloaded at daemon startup into `$PASEO_HOME/models/local-s
 
 ### Local STT models and language support
 
-| Model ID                    | Languages                                                                                                                                                                                                                                                                    |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `parakeet-tdt-0.6b-v2-int8` | English only (default). Includes punctuation and capitalization.                                                                                                                                                                                                             |
-| `parakeet-tdt-0.6b-v3-int8` | 25 European languages, auto-detected: Bulgarian, Croatian, Czech, Danish, Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian, Russian, Slovak, Slovenian, Spanish, Swedish, Ukrainian. |
+| Model ID                              | Languages                                                                                                                                                                                                                                                                    |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `parakeet-tdt-0.6b-v2-int8`           | English only (default). Includes punctuation and capitalization.                                                                                                                                                                                                             |
+| `parakeet-tdt-0.6b-v3-int8`           | 25 European languages, auto-detected: Bulgarian, Croatian, Czech, Danish, Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian, Russian, Slovak, Slovenian, Spanish, Swedish, Ukrainian. |
+| `language: "vi"` with local dictation | Vietnamese Zipformer 30M INT8. Paseo downloads the Sherpa-ONNX conversion in the background when the daemon starts; partial text refreshes while audio arrives.                                                                                                              |
 
-**To use a non-English language, switch the local STT model to `parakeet-tdt-0.6b-v3-int8`.** v3 detects the spoken language automatically — there is no per-language setting for it. The `language` field below does **not** steer the local Parakeet model (v2 is English-only, v3 auto-detects); it only applies to the OpenAI STT provider.
+To use Vietnamese local dictation, set `features.dictation.stt.language` to `vi`. If the local provider is enabled for dictation, Paseo downloads the Vietnamese model in the background at daemon startup and reports readiness while it is downloading. Other languages keep the configured local model. Parakeet v3 detects its supported European languages automatically. The `language` field also applies to OpenAI STT.
 
 ```json
 {
   "version": 1,
   "features": {
     "dictation": {
-      "stt": { "provider": "local", "model": "parakeet-tdt-0.6b-v2-int8", "language": "en" }
+      "stt": { "provider": "local", "language": "vi" }
     },
     "voiceMode": {
       "llm": { "provider": "claude", "model": "haiku" },
@@ -72,7 +73,9 @@ For multilingual local dictation, set the model to v3 — it auto-detects the la
 }
 ```
 
-The `language` field applies only to the OpenAI STT provider: set `features.dictation.stt.language` for dictation and `features.voiceMode.stt.language` for voice mode. If voice language is omitted, Paseo uses the dictation language before falling back to `en`. It has no effect on the local Parakeet models.
+Local Vietnamese dictation uses the Zipformer 30M model built from [hynt/Zipformer-30M-RNNT-Streaming-6000h](https://huggingface.co/hynt/Zipformer-30M-RNNT-Streaming-6000h), downloaded as a Sherpa-ONNX conversion at runtime. The source model is published under `CC BY-NC-ND 4.0`; this implementation does not bundle or redistribute the model. Keep this setup for non-commercial internal use, and obtain the appropriate permission or license before commercial deployment or redistribution.
+
+The voice-mode `language` field applies to OpenAI STT. If voice language is omitted, Paseo uses the dictation language before falling back to `en`. Local voice-mode STT continues using its configured model.
 
 ## OpenAI Voice Option
 
@@ -120,8 +123,8 @@ Paseo uses these paths under the configured OpenAI base URL:
 - `PASEO_LOCAL_MODELS_DIR`, local model storage directory
 - `PASEO_DICTATION_LOCAL_STT_MODEL`, local dictation STT model ID
 - `PASEO_VOICE_LOCAL_STT_MODEL`, `PASEO_VOICE_LOCAL_TTS_MODEL`, local voice STT/TTS model IDs
-- `PASEO_DICTATION_LANGUAGE`, dictation STT language (OpenAI STT only; ignored by local Parakeet)
-- `PASEO_VOICE_LANGUAGE`, voice mode STT language; falls back to `PASEO_DICTATION_LANGUAGE` when unset (OpenAI STT only; ignored by local Parakeet)
+- `PASEO_DICTATION_LANGUAGE`, dictation STT language; `vi` selects the local Vietnamese model when dictation uses local STT
+- `PASEO_VOICE_LANGUAGE`, voice mode STT language; falls back to `PASEO_DICTATION_LANGUAGE` when unset (applies to OpenAI STT)
 - `PASEO_VOICE_LOCAL_TTS_SPEAKER_ID`, `PASEO_VOICE_LOCAL_TTS_SPEED`, optional local voice TTS tuning
 
 ## Operational Notes

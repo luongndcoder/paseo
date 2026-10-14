@@ -10,7 +10,7 @@ function assertFileExists(filePath: string, label: string): void {
 }
 
 export interface SherpaOfflineRecognizerModel {
-  kind: "nemo_transducer";
+  kind: "nemo_transducer" | "transducer";
   encoder: string;
   decoder: string;
   joiner: string;
@@ -26,6 +26,9 @@ export interface SherpaOfflineRecognizerConfig {
   featureDim?: number;
   decodingMethod?: "greedy_search";
   maxActivePaths?: number;
+  // WHY: some models (zipformer-vi) are trained on upper-cased transcripts, so raw output is ALL CAPS.
+  uppercaseVocabulary?: boolean;
+  textLocale?: string;
 }
 
 interface SherpaOfflineRecognizerNative {
@@ -46,6 +49,8 @@ export class SherpaOfflineRecognizerEngine {
   public readonly recognizer: SherpaOfflineRecognizerNative;
   public readonly sampleRate: number;
   private readonly logger: pino.Logger;
+  private readonly uppercaseVocabulary: boolean;
+  private readonly textLocale: string | undefined;
 
   constructor(config: SherpaOfflineRecognizerConfig, logger: pino.Logger) {
     this.logger = logger.child({
@@ -58,6 +63,9 @@ export class SherpaOfflineRecognizerEngine {
     assertFileExists(config.model.decoder, "offline decoder");
     assertFileExists(config.model.joiner, "offline joiner");
     assertFileExists(config.model.tokens, "tokens");
+
+    this.uppercaseVocabulary = config.uppercaseVocabulary ?? false;
+    this.textLocale = config.textLocale;
 
     const sherpa = loadSherpaOnnxNode();
 
@@ -73,7 +81,7 @@ export class SherpaOfflineRecognizerEngine {
           joiner: config.model.joiner,
         },
         tokens: config.model.tokens,
-        modelType: "nemo_transducer",
+        modelType: config.model.kind,
         numThreads: config.numThreads ?? 1,
         provider: config.provider ?? "cpu",
         debug: config.debug ?? 0,
@@ -97,6 +105,10 @@ export class SherpaOfflineRecognizerEngine {
       { sampleRate: this.sampleRate, numThreads: recognizerConfig.modelConfig.numThreads },
       "Sherpa offline recognizer initialized",
     );
+  }
+
+  normalizeText(text: string): string {
+    return this.uppercaseVocabulary ? text.toLocaleLowerCase(this.textLocale) : text;
   }
 
   createStream(): SherpaOfflineStreamNative {

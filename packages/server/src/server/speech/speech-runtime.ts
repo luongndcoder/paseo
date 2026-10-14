@@ -3,6 +3,10 @@ import type { Logger } from "pino";
 import type { PaseoOpenAIConfig, PaseoSpeechConfig } from "../bootstrap.js";
 import type { LocalSpeechModelId } from "./providers/local/config.js";
 import { ensureLocalSpeechModels, listMissingLocalSpeechModels } from "./providers/local/models.js";
+import {
+  ensureVietnameseDictationModel,
+  isVietnameseDictationModelInstalled,
+} from "./providers/local/sherpa/vietnamese-model.js";
 import { initializeLocalSpeechServices } from "./providers/local/runtime.js";
 import {
   getOpenAiSpeechAvailability,
@@ -140,6 +144,9 @@ function buildRealtimeVoiceReadiness(params: {
 function buildDictationReadiness(params: {
   providers: RequestedSpeechProviders;
   dictationSttService: SpeechToTextProvider | null;
+  missingVietnameseDictationModel: boolean;
+  backgroundDownloadInProgress: boolean;
+  backgroundDownloadError: string | null;
 }): SpeechReadinessState {
   const enabled = params.providers.dictationStt.enabled !== false;
   if (!enabled) {
@@ -149,6 +156,25 @@ function buildDictationReadiness(params: {
       reasonCode: "disabled",
       message: "Dictation is disabled in daemon config.",
       retryable: false,
+      missingModelIds: [],
+    };
+  }
+  if (params.missingVietnameseDictationModel) {
+    let reasonCode: SpeechReadinessReasonCode = "models_missing";
+    let message = "Vietnamese dictation is unavailable: its local speech model is missing.";
+    if (params.backgroundDownloadInProgress) {
+      reasonCode = "model_download_in_progress";
+      message = "Vietnamese dictation is unavailable while its local speech model downloads.";
+    } else if (params.backgroundDownloadError) {
+      reasonCode = "model_download_failed";
+      message = `Vietnamese dictation model download failed (${params.backgroundDownloadError}).`;
+    }
+    return {
+      enabled: true,
+      available: false,
+      reasonCode,
+      message,
+      retryable: !params.backgroundDownloadError,
       missingModelIds: [],
     };
   }
@@ -176,6 +202,7 @@ function buildVoiceFeatureReadiness(params: {
   realtimeVoice: SpeechReadinessState;
   dictation: SpeechReadinessState;
   missingLocalModelIds: LocalSpeechModelId[];
+  missingVietnameseDictationModel: boolean;
   backgroundDownloadInProgress: boolean;
   backgroundDownloadError: string | null;
 }): SpeechReadinessState {
@@ -191,14 +218,16 @@ function buildVoiceFeatureReadiness(params: {
     };
   }
 
-  if (params.missingLocalModelIds.length > 0) {
+  if (params.missingLocalModelIds.length > 0 || params.missingVietnameseDictationModel) {
     const missingModelIds = [...params.missingLocalModelIds];
     if (params.backgroundDownloadInProgress) {
       return {
         enabled: true,
         available: false,
         reasonCode: "model_download_in_progress",
-        message: `Voice features are unavailable while models download in the background (${joinModelIds(missingModelIds)}).`,
+        message: params.missingVietnameseDictationModel
+          ? "Voice features are unavailable while local speech models download in the background."
+          : `Voice features are unavailable while models download in the background (${joinModelIds(missingModelIds)}).`,
         retryable: true,
         missingModelIds,
       };
@@ -217,7 +246,9 @@ function buildVoiceFeatureReadiness(params: {
       enabled: true,
       available: false,
       reasonCode: "models_missing",
-      message: `Voice features are unavailable: missing local models (${joinModelIds(missingModelIds)}).`,
+      message: params.missingVietnameseDictationModel
+        ? "Voice features are unavailable: the Vietnamese local speech model is missing."
+        : `Voice features are unavailable: missing local models (${joinModelIds(missingModelIds)}).`,
       retryable: true,
       missingModelIds,
     };
@@ -340,11 +371,13 @@ export function createSpeechService(params: {
   let localModelConfig: {
     modelsDir: string;
     defaultModelIds: LocalSpeechModelId[];
+    ensureVietnameseDictationModel?: boolean;
   } | null = null;
   let localCleanup = () => {};
   let localVoiceTtsProvider: TextToSpeechProvider | null = null;
 
   let missingLocalModelIds: LocalSpeechModelId[] = [];
+  let missingVietnameseDictationModel = false;
   let backgroundDownloadInProgress = false;
   let backgroundDownloadAbortController: AbortController | null = null;
   let backgroundDownloadPromise: Promise<void> | null = null;
@@ -374,11 +407,15 @@ export function createSpeechService(params: {
     const dictation = buildDictationReadiness({
       providers,
       dictationSttService,
+      missingVietnameseDictationModel,
+      backgroundDownloadInProgress,
+      backgroundDownloadError,
     });
     const voiceFeature = buildVoiceFeatureReadiness({
       realtimeVoice,
       dictation,
       missingLocalModelIds,
+      missingVietnameseDictationModel,
       backgroundDownloadInProgress,
       backgroundDownloadError,
     });
@@ -451,6 +488,9 @@ export function createSpeechService(params: {
           modelIds: localModelConfig.defaultModelIds,
         })
       : [];
+    missingVietnameseDictationModel = localModelConfig?.ensureVietnameseDictationModel
+      ? !(await isVietnameseDictationModelInstalled(localModelConfig.modelsDir))
+      : false;
   };
 
   const reconcileServices = async (): Promise<void> => {
@@ -549,7 +589,8 @@ export function createSpeechService(params: {
     }
     const modelsDir = localModelConfig?.modelsDir ?? null;
     const modelIds = [...missingLocalModelIds];
-    if (!modelsDir || modelIds.length === 0) {
+    const downloadVietnameseModel = missingVietnameseDictationModel;
+    if (!modelsDir || (modelIds.length === 0 && !downloadVietnameseModel)) {
       return;
     }
 
@@ -561,6 +602,7 @@ export function createSpeechService(params: {
       {
         modelsDir,
         modelIds,
+        downloadVietnameseModel,
       },
       "Starting background download for missing local speech models",
     );
@@ -575,6 +617,13 @@ export function createSpeechService(params: {
           logger,
           signal: abortController.signal,
         });
+        if (downloadVietnameseModel) {
+          await ensureVietnameseDictationModel({
+            modelsDir,
+            logger,
+            signal: abortController.signal,
+          });
+        }
         await runReconcile();
         backgroundDownloadError = null;
       } catch (error) {
@@ -584,6 +633,7 @@ export function createSpeechService(params: {
           {
             err: error,
             modelIds,
+            downloadVietnameseModel,
           },
           "Background local speech model download failed",
         );
@@ -610,13 +660,14 @@ export function createSpeechService(params: {
         snapshot.voiceFeature.enabled &&
         !snapshot.voiceFeature.available &&
         missingLocalModelIds.length === 0 &&
+        !missingVietnameseDictationModel &&
         !backgroundDownloadInProgress
       ) {
         await runReconcile();
       }
 
       if (
-        missingLocalModelIds.length > 0 &&
+        (missingLocalModelIds.length > 0 || missingVietnameseDictationModel) &&
         !backgroundDownloadInProgress &&
         !backgroundDownloadError
       ) {
@@ -640,7 +691,7 @@ export function createSpeechService(params: {
         await runReconcile();
         const snapshot = computeReadinessSnapshot();
         if (snapshot.voiceFeature.enabled && !snapshot.voiceFeature.available) {
-          if (missingLocalModelIds.length > 0) {
+          if (missingLocalModelIds.length > 0 || missingVietnameseDictationModel) {
             startBackgroundDownload();
           }
           scheduleMonitor();

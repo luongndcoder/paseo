@@ -1,6 +1,6 @@
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
-import { useMemo } from "react";
-import { View, Text, Pressable } from "react-native";
+import { useCallback, useMemo, useState } from "react";
+import { View, Text, Pressable, type LayoutChangeEvent } from "react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { X, ArrowUp, RefreshCcw, Check, Mic, Pencil } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
@@ -138,6 +138,21 @@ export function DictationControls({
  * Full-width overlay variant for the agent input footer.
  * Uses blue background with white icons.
  */
+// Rough average glyph width of the transcript font relative to its size; slightly generous so
+// the trimmed text fits on one line and never hits the tail ellipsis.
+const TRANSCRIPT_CHAR_WIDTH_RATIO = 0.6;
+const TRANSCRIPT_MIN_CHARS = 16;
+
+// WHY: the overlay has a fixed height and the volume meter already fills it, so the live
+// transcript sits on one line beside the meter. The newest words
+// matter while speaking, and ellipsizeMode="head" is not supported on web, so trim the start here.
+function tailOfTranscript(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const tail = text.slice(-(maxChars - 1));
+  const wordStart = tail.indexOf(" ");
+  return `…${wordStart >= 0 ? tail.slice(wordStart + 1) : tail}`;
+}
+
 export function DictationOverlay({
   volume,
   duration,
@@ -150,7 +165,8 @@ export function DictationOverlay({
   onAcceptAndSend,
   onRetry,
   onDiscard,
-}: Omit<DictationControlsProps, "onStart" | "disabled" | "transcript"> & { errorText?: string }) {
+  transcript,
+}: Omit<DictationControlsProps, "onStart" | "disabled"> & { errorText?: string }) {
   const { theme } = useUnistyles();
   const { t } = useTranslation();
   const isFailed = status === "failed";
@@ -171,6 +187,26 @@ export function DictationOverlay({
   );
   const overlayTimerTextStyle = useMemo(
     () => [overlayStyles.timerText, { color: theme.colors.accentForeground }],
+    [theme.colors.accentForeground],
+  );
+  const [transcriptWidth, setTranscriptWidth] = useState(0);
+  const handleTranscriptLayout = useCallback((event: LayoutChangeEvent) => {
+    setTranscriptWidth(event.nativeEvent.layout.width);
+  }, []);
+  const transcriptMaxChars = Math.max(
+    TRANSCRIPT_MIN_CHARS,
+    Math.floor(transcriptWidth / (theme.fontSize.base * TRANSCRIPT_CHAR_WIDTH_RATIO)),
+  );
+  const showTranscript = !isFailed && Boolean(transcript);
+  const centerContainerStyle = useMemo(
+    () => [
+      overlayStyles.centerContainer,
+      showTranscript && overlayStyles.centerContainerWithTranscript,
+    ],
+    [showTranscript],
+  );
+  const liveTranscriptTextStyle = useMemo(
+    () => [overlayStyles.liveTranscriptText, { color: theme.colors.accentForeground }],
     [theme.colors.accentForeground],
   );
   const overlayTranscriptTextStyle = useMemo(
@@ -199,7 +235,7 @@ export function DictationOverlay({
         <X size={theme.iconSize.lg} color={theme.colors.accentForeground} strokeWidth={2.5} />
       </Pressable>
 
-      <View style={overlayStyles.centerContainer}>
+      <View style={centerContainerStyle}>
         <View style={overlayStyles.meterRow}>
           <VolumeMeter
             volume={volume}
@@ -216,6 +252,13 @@ export function DictationOverlay({
               ? t("message.dictation.failed", { error: errorText })
               : t("message.dictation.failedRetry")}
           </Text>
+        ) : null}
+        {showTranscript && transcript ? (
+          <View style={overlayStyles.transcriptSlot} onLayout={handleTranscriptLayout}>
+            <Text numberOfLines={1} style={liveTranscriptTextStyle}>
+              {tailOfTranscript(transcript, transcriptMaxChars)}
+            </Text>
+          </View>
         ) : null}
       </View>
 
@@ -359,6 +402,22 @@ const overlayStyles = StyleSheet.create((theme) => ({
     alignItems: "center",
     justifyContent: "center",
     gap: theme.spacing[2],
+  },
+  centerContainerWithTranscript: {
+    flexDirection: "row",
+    justifyContent: "flex-start",
+    gap: theme.spacing[4],
+    paddingHorizontal: theme.spacing[4],
+  },
+  transcriptSlot: {
+    flex: 1,
+    minWidth: 0,
+  },
+  liveTranscriptText: {
+    fontSize: theme.fontSize.base,
+    fontWeight: theme.fontWeight.normal,
+    textAlign: "left",
+    opacity: 0.95,
   },
   meterRow: {
     flexDirection: "row",

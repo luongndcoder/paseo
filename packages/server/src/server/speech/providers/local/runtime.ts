@@ -40,6 +40,7 @@ export interface InitializedLocalSpeech {
   localModelConfig: {
     modelsDir: string;
     defaultModelIds: LocalSpeechModelId[];
+    ensureVietnameseDictationModel?: boolean;
   } | null;
   availability: LocalSpeechAvailability;
   cleanup: () => void;
@@ -99,6 +100,19 @@ function isLocalProviderEnabled(provider: { enabled?: boolean; provider: string 
   return provider.enabled !== false && provider.provider === "local";
 }
 
+function shouldEnsureVietnameseDictationModel(params: {
+  providers: RequestedSpeechProviders;
+  language: string;
+}): boolean {
+  return (
+    isLocalProviderEnabled(params.providers.dictationStt) && /^vi(?:-|$)/i.test(params.language)
+  );
+}
+
+function resolveLocalDictationLanguage(speechConfig: PaseoSpeechConfig | null): string {
+  return speechConfig?.sttLanguages?.dictation ?? "en";
+}
+
 function warnLocalConfigMissing(logger: Logger, feature: string): void {
   logger.warn(
     { configured: false },
@@ -142,6 +156,11 @@ export async function initializeLocalSpeechServices(params: {
   const { providers, logger, speechConfig } = params;
   const localConfig = speechConfig?.local ?? null;
   const localModels = resolveConfiguredLocalModels(speechConfig);
+  const dictationLanguage = resolveLocalDictationLanguage(speechConfig);
+  const ensureVietnameseDictationModel = shouldEnsureVietnameseDictationModel({
+    providers,
+    language: dictationLanguage,
+  });
 
   let sttService: SpeechToTextProvider | null = null;
   let ttsService: TextToSpeechProvider | null = null;
@@ -161,6 +180,7 @@ export async function initializeLocalSpeechServices(params: {
           modelsDir: localConfig.modelsDir,
           voiceSttModel: localModels.voiceLocalSttModel,
           dictationSttModel: localModels.dictationLocalSttModel,
+          dictationLanguage,
           voiceTtsModel: localModels.voiceLocalTtsModel,
           voiceTtsSpeakerId: speechConfig?.local?.models.voiceTtsSpeakerId,
           voiceTtsSpeed: speechConfig?.local?.models.voiceTtsSpeed,
@@ -217,6 +237,7 @@ export async function initializeLocalSpeechServices(params: {
       ? {
           modelsDir: localConfig.modelsDir,
           defaultModelIds: requiredLocalModelIds,
+          ensureVietnameseDictationModel,
         }
       : null,
     availability: getLocalSpeechAvailability(speechConfig),

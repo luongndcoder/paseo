@@ -5,6 +5,10 @@ import type { StreamingTranscriptionSession } from "../../../speech-provider.js"
 import { pcm16lePeakAbs, pcm16leToFloat32 } from "../../../audio.js";
 import { SherpaOfflineRecognizerEngine } from "./sherpa-offline-recognizer.js";
 
+function capitalizeFirstLetter(text: string): string {
+  return text.length === 0 ? text : text[0].toLocaleUpperCase() + text.slice(1);
+}
+
 export class SherpaParakeetRealtimeTranscriptionSession
   extends EventEmitter
   implements StreamingTranscriptionSession
@@ -147,11 +151,15 @@ export class SherpaParakeetRealtimeTranscriptionSession
       this.engine.acceptWaveform(stream, this.engine.sampleRate, floatSamples);
       this.engine.recognizer.decode(stream);
       const result = this.engine.recognizer.getResult(stream);
-      return String(
-        (typeof result === "object" && result && "text" in result ? result.text : undefined) ??
-          result ??
-          "",
-      ).trim();
+      const text = this.engine.normalizeText(
+        String(
+          (typeof result === "object" && result && "text" in result ? result.text : undefined) ??
+            result ??
+            "",
+        ).trim(),
+      );
+      // Later segments continue the same dictation, so only the first one starts a sentence.
+      return this.previousSegmentId === null ? capitalizeFirstLetter(text) : text;
     } finally {
       try {
         stream.free?.();

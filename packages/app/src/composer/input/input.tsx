@@ -538,6 +538,7 @@ function MessageInputOverlay({
   isDictationProcessing,
   dictationStatus,
   dictationError,
+  dictationPartialTranscript,
   onCancelRecording,
   onAcceptRecording,
   onAcceptAndSendRecording,
@@ -561,6 +562,7 @@ function MessageInputOverlay({
   isDictationProcessing: boolean;
   dictationStatus: React.ComponentProps<typeof DictationOverlay>["status"];
   dictationError: string | null;
+  dictationPartialTranscript: string;
   onCancelRecording: () => Promise<void>;
   onAcceptRecording: () => Promise<void>;
   onAcceptAndSendRecording: () => Promise<void>;
@@ -576,6 +578,7 @@ function MessageInputOverlay({
         isRecording={isDictating}
         isProcessing={isDictationProcessing}
         status={dictationStatus}
+        transcript={dictationPartialTranscript}
         errorText={dictationStatus === "failed" ? (dictationError ?? undefined) : undefined}
         onCancel={onCancelRecording}
         onAccept={onAcceptRecording}
@@ -1495,7 +1498,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       isRecording: isDictating,
       isRecordingActive: isDictationActive,
       isProcessing: isDictationProcessing,
-      partialTranscript: _dictationPartialTranscript,
+      partialTranscript: dictationPartialTranscript,
       volume: dictationVolume,
       duration: dictationDuration,
       error: dictationError,
@@ -2133,6 +2136,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
             isDictationProcessing={isDictationProcessing}
             dictationStatus={dictationStatus}
             dictationError={dictationError}
+            dictationPartialTranscript={dictationPartialTranscript}
             onCancelRecording={handleCancelRecording}
             onAcceptRecording={handleAcceptRecording}
             onAcceptAndSendRecording={handleAcceptAndSendRecording}
@@ -2154,6 +2158,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         isDictationProcessing,
         dictationStatus,
         dictationError,
+        dictationPartialTranscript,
         handleCancelRecording,
         handleAcceptRecording,
         handleAcceptAndSendRecording,
