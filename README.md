@@ -6,10 +6,14 @@
 
 <p align="center">
   <a href="README.md">English</a> ·
+  <a href="SETUP_NEW_MACHINE.md"><strong>🇻🇳 Hướng dẫn cài đặt máy mới (Vietnamese Voice + PyCharm Git + SLP)</strong></a> ·
   <a href="README.zh-CN.md">简体中文</a> ·
   <a href="README.ja.md">日本語</a> ·
   <a href="README.ko.md">한국어</a>
 </p>
+
+> **Bản Fork Cá Nhân (`luongndcoder/paseo`)**: Tích hợp nhận diện giọng nói tiếng Việt offline (`sherpa-onnx`), bộ công cụ Git chuẩn PyCharm (`Cmd + 9`), PlantUML preview, ZeroSub (`luongndcoder/zerosub`), và hệ thống điều phối đa tác tử **SLP (`luongndcoder/paseo-slp`)**.
+> 👉 Xem hướng dẫn cài đặt trọn bộ từ đầu cho máy mới tại **[SETUP_NEW_MACHINE.md](SETUP_NEW_MACHINE.md)** hoặc chạy `bash scripts/setup-new-machine.sh`.
 
 <p align="center">
   <a href="https://github.com/getpaseo/paseo/stargazers">
