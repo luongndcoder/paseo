@@ -2,7 +2,7 @@ import type { ParsedDiffFile } from "@getpaseo/protocol/messages";
 import { Columns2, Lock, Plus, RotateCcw, Rows2 } from "lucide-react-native";
 import { useMemo } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
+import { StyleSheet, UnistylesRuntime } from "react-native-unistyles";
 
 export type ParsedDiffHunk = ParsedDiffFile["hunks"][number] & {
   header?: string;
@@ -179,7 +179,7 @@ export function SplitDiffViewer({
   fullHeight = false,
   activeHunkIndex = null,
 }: SplitDiffViewerProps) {
-  const { theme } = useUnistyles();
+  const theme = UnistylesRuntime.getTheme();
 
   const preparedHunks = useMemo(() => {
     if (!file || !file.hunks) return [];
@@ -206,10 +206,8 @@ export function SplitDiffViewer({
     );
   }
 
-  const resolvedLeftLabel =
-    leftRevisionLabel || `Base (${file.oldPath || file.path})`;
-  const resolvedRightLabel =
-    rightRevisionLabel || `Revision (${file.path})`;
+  const resolvedLeftLabel = leftRevisionLabel || `Base (${file.oldPath || file.path})`;
+  const resolvedRightLabel = rightRevisionLabel || `Revision (${file.path})`;
 
   return (
     <View
@@ -233,8 +231,7 @@ export function SplitDiffViewer({
                 <Text style={styles.statDelText}>-{file.deletions}</Text>
               </View>
               <Text style={styles.diffCountText}>
-                {preparedHunks.length}{" "}
-                {preparedHunks.length === 1 ? "difference" : "differences"}
+                {preparedHunks.length} {preparedHunks.length === 1 ? "difference" : "differences"}
               </Text>
             </View>
           </View>
@@ -242,44 +239,28 @@ export function SplitDiffViewer({
           <View style={styles.modeToggleGroup} testID="split-diff-mode-toggle">
             <Pressable
               testID="diff-mode-unified-btn"
-              style={[
-                styles.modePill,
-                mode === "unified" && styles.modePillActive,
-              ]}
+              style={[styles.modePill, mode === "unified" && styles.modePillActive]}
               onPress={() => onModeChange("unified")}
             >
               <Rows2
                 size={12}
                 color={mode === "unified" ? "#10b981" : theme.colors.foregroundMuted}
               />
-              <Text
-                style={[
-                  styles.modePillText,
-                  mode === "unified" && styles.modePillTextActive,
-                ]}
-              >
+              <Text style={[styles.modePillText, mode === "unified" && styles.modePillTextActive]}>
                 Unified
               </Text>
             </Pressable>
 
             <Pressable
               testID="diff-mode-split-btn"
-              style={[
-                styles.modePill,
-                mode === "split" && styles.modePillActive,
-              ]}
+              style={[styles.modePill, mode === "split" && styles.modePillActive]}
               onPress={() => onModeChange("split")}
             >
               <Columns2
                 size={12}
                 color={mode === "split" ? "#10b981" : theme.colors.foregroundMuted}
               />
-              <Text
-                style={[
-                  styles.modePillText,
-                  mode === "split" && styles.modePillTextActive,
-                ]}
-              >
+              <Text style={[styles.modePillText, mode === "split" && styles.modePillTextActive]}>
                 Side-by-Side
               </Text>
             </Pressable>
@@ -323,10 +304,7 @@ export function SplitDiffViewer({
             return (
               <View
                 key={key}
-                style={[
-                  styles.hunkCard,
-                  isHighlightedHunk && styles.hunkCardHighlighted,
-                ]}
+                style={[styles.hunkCard, isHighlightedHunk && styles.hunkCardHighlighted]}
                 testID={`diff-hunk-${hIdx}`}
               >
                 {/* Hunk Separator / Action Bar */}
@@ -380,8 +358,7 @@ export function SplitDiffViewer({
                 {mode === "unified" ? (
                   <View style={styles.unifiedBody}>
                     {unifiedLines.slice(0, 400).map((line, lIdx) => {
-                      const prefix =
-                        line.type === "add" ? "+" : line.type === "remove" ? "-" : " ";
+                      const prefix = line.type === "add" ? "+" : line.type === "remove" ? "-" : " ";
                       return (
                         <View
                           key={`u-${hIdx}-${lIdx}`}
@@ -391,12 +368,8 @@ export function SplitDiffViewer({
                             line.type === "remove" && styles.rowRemoveBg,
                           ]}
                         >
-                          <Text style={styles.lineNumberCell}>
-                            {line.oldLineNumber ?? ""}
-                          </Text>
-                          <Text style={styles.lineNumberCell}>
-                            {line.newLineNumber ?? ""}
-                          </Text>
+                          <Text style={styles.lineNumberCell}>{line.oldLineNumber ?? ""}</Text>
+                          <Text style={styles.lineNumberCell}>{line.newLineNumber ?? ""}</Text>
                           <Text
                             style={[
                               styles.prefixCell,
@@ -424,8 +397,7 @@ export function SplitDiffViewer({
                     {splitRows.slice(0, 400).map((pair, rIdx) => {
                       const left = pair.left;
                       const right = pair.right;
-                      const isChangedPair =
-                        left?.type === "remove" || right?.type === "add";
+                      const isChangedPair = left?.type === "remove" || right?.type === "add";
                       const connectorColor =
                         left?.type === "remove" && right?.type === "add"
                           ? "#06b6d4"
@@ -474,10 +446,7 @@ export function SplitDiffViewer({
                               {left?.oldLineNumber ?? ""}
                             </Text>
                             <View
-                              style={[
-                                styles.centerBridgeBar,
-                                { backgroundColor: connectorColor },
-                              ]}
+                              style={[styles.centerBridgeBar, { backgroundColor: connectorColor }]}
                             />
                             <Text
                               style={[
@@ -498,10 +467,7 @@ export function SplitDiffViewer({
                             ]}
                           >
                             <Text
-                              style={[
-                                styles.codeCell,
-                                right?.type === "add" && styles.textAddCode,
-                              ]}
+                              style={[styles.codeCell, right?.type === "add" && styles.textAddCode]}
                             >
                               {right?.content ?? ""}
                             </Text>
@@ -627,7 +593,7 @@ const styles = StyleSheet.create((theme) => ({
   revisionSubHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#1e1f22",
+    backgroundColor: theme.colors.surface1,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
   },
@@ -657,7 +623,7 @@ const styles = StyleSheet.create((theme) => ({
     marginBottom: 8,
     borderWidth: 1,
     borderColor: theme.colors.border,
-    backgroundColor: "#1e1f22",
+    backgroundColor: theme.colors.surface0,
     overflow: "hidden",
   },
   hunkCardHighlighted: {
@@ -670,7 +636,7 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.spacing[2],
     paddingHorizontal: 10,
     paddingVertical: 4,
-    backgroundColor: "rgba(30, 41, 59, 0.85)",
+    backgroundColor: theme.colors.surface2,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
   },
@@ -678,7 +644,7 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     fontSize: 11,
     fontFamily: theme.fontFamily.mono,
-    color: "#94a3b8",
+    color: theme.colors.foregroundMuted,
   },
   hunkActionsRow: {
     flexDirection: "row",
@@ -752,19 +718,21 @@ const styles = StyleSheet.create((theme) => ({
     borderRightColor: theme.colors.border,
   },
   splitEmptyCellBg: {
-    backgroundColor: "rgba(15, 23, 42, 0.55)",
+    backgroundColor: theme.colors.surfaceDiffEmpty,
   },
   rowAddBg: {
-    backgroundColor: "rgba(27, 67, 50, 0.65)",
+    backgroundColor:
+      theme.colorScheme === "dark" ? "rgba(27, 67, 50, 0.55)" : "rgba(22, 163, 74, 0.12)",
   },
   rowRemoveBg: {
-    backgroundColor: "rgba(69, 26, 38, 0.65)",
+    backgroundColor:
+      theme.colorScheme === "dark" ? "rgba(69, 26, 38, 0.55)" : "rgba(220, 38, 38, 0.12)",
   },
   lineNumberGutterLeft: {
     width: 34,
     fontSize: 11,
     fontFamily: theme.fontFamily.mono,
-    color: "#64748b",
+    color: theme.colors.foregroundExtraMuted,
     textAlign: "right",
     paddingRight: 8,
     flexShrink: 0,
@@ -775,20 +743,20 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 6,
-    backgroundColor: "#16181d",
+    backgroundColor: theme.colors.surface1,
     borderLeftWidth: 1,
     borderRightWidth: 1,
-    borderColor: "rgba(148, 163, 184, 0.16)",
+    borderColor: theme.colors.border,
     flexShrink: 0,
   },
   centerBridgeGutterActive: {
-    backgroundColor: "rgba(30, 41, 59, 0.9)",
+    backgroundColor: theme.colors.surface2,
   },
   centerBridgeLineNum: {
     width: 28,
     fontSize: 10,
     fontFamily: theme.fontFamily.mono,
-    color: "#64748b",
+    color: theme.colors.foregroundExtraMuted,
     textAlign: "right",
   },
   centerBridgeBar: {
@@ -801,7 +769,7 @@ const styles = StyleSheet.create((theme) => ({
     width: 36,
     fontSize: 11,
     fontFamily: theme.fontFamily.mono,
-    color: "#64748b",
+    color: theme.colors.foregroundExtraMuted,
     textAlign: "right",
     paddingRight: 6,
     flexShrink: 0,
@@ -810,7 +778,7 @@ const styles = StyleSheet.create((theme) => ({
     width: 14,
     fontSize: 11,
     fontFamily: theme.fontFamily.mono,
-    color: "#64748b",
+    color: theme.colors.foregroundExtraMuted,
     flexShrink: 0,
   },
   codeCell: {
@@ -818,21 +786,21 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: 12,
     lineHeight: 17,
     fontFamily: theme.fontFamily.mono,
-    color: "#d4d4d8",
+    color: theme.colors.foreground,
   },
   textAddMarker: {
-    color: "#10b981",
+    color: theme.colors.diffAddition,
     fontWeight: theme.fontWeight.semibold,
   },
   textRemoveMarker: {
-    color: "#f43f5e",
+    color: theme.colors.diffDeletion,
     fontWeight: theme.fontWeight.semibold,
   },
   textAddCode: {
-    color: "#ecfdf5",
+    color: theme.colors.foreground,
   },
   textRemoveCode: {
-    color: "#ffe4e6",
+    color: theme.colors.foreground,
   },
   emptyBox: {
     padding: theme.spacing[4],

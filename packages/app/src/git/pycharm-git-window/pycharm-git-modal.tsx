@@ -58,7 +58,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import Svg, { Circle, Line, Path } from "react-native-svg";
-import { StyleSheet } from "react-native-unistyles";
+import { StyleSheet, UnistylesRuntime } from "react-native-unistyles";
 
 import { isWeb } from "@/constants/platform";
 import { useToast } from "@/contexts/toast-context";
@@ -94,7 +94,13 @@ function laneCenterX(lane: number): number {
   return 10 + lane * LANE_WIDTH;
 }
 
-function CommitRowGraphSvg({ row }: { row: CommitGraphRowLayout }) {
+function CommitRowGraphSvg({
+  row,
+  surfaceColor,
+}: {
+  row: CommitGraphRowLayout;
+  surfaceColor: string;
+}) {
   const width = Math.max(24, (row.laneCount + 1) * LANE_WIDTH + 6);
   const centerY = ROW_HEIGHT / 2;
   const cx = laneCenterX(row.lane);
@@ -162,7 +168,7 @@ function CommitRowGraphSvg({ row }: { row: CommitGraphRowLayout }) {
           cx={cx}
           cy={centerY}
           r={row.isMerge ? NODE_RADIUS + 0.5 : NODE_RADIUS}
-          fill={row.commit.isOnRemote ? nodeColor : "#1e1f22"}
+          fill={row.commit.isOnRemote ? nodeColor : surfaceColor}
           stroke={nodeColor}
           strokeWidth={1.75}
         />
@@ -301,6 +307,7 @@ export function PyCharmGitModal({
   initialCommitSha = null,
   onOpenCommitTab,
 }: PyCharmGitModalProps) {
+  const theme = UnistylesRuntime.getTheme();
   const visible = Boolean(visibleProp ?? open);
   const client = useHostRuntimeClient(serverId);
   const queryClient = useQueryClient();
@@ -2396,7 +2403,7 @@ export function PyCharmGitModal({
                         }}
                         testID={`pycharm-git-commit-row-${commit.shortSha}`}
                       >
-                        <CommitRowGraphSvg row={row} />
+                        <CommitRowGraphSvg row={row} surfaceColor={theme.colors.surface0} />
 
                         {/* Column 1: Commit Subject + Subtle Right-Aligned Ref Badge (exact PyCharm layout!) */}
                         <View style={styles.commitRowSubjectCol}>
@@ -3033,10 +3040,10 @@ const styles = StyleSheet.create((theme) => ({
     width: "100%",
     maxWidth: 1600,
     height: "95%",
-    backgroundColor: "#1e1f22",
+    backgroundColor: theme.colors.surface0,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: "#31343b",
+    borderColor: theme.colors.border,
     overflow: "hidden",
     flexDirection: "column",
   },
@@ -3046,9 +3053,9 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: "space-between",
     paddingHorizontal: 12,
     height: 36,
-    backgroundColor: "#2b2d30",
+    backgroundColor: theme.colors.surface2,
     borderBottomWidth: 1,
-    borderBottomColor: "#393b40",
+    borderBottomColor: theme.colors.border,
   },
   topHeaderLeft: {
     flexDirection: "row",
@@ -3060,7 +3067,7 @@ const styles = StyleSheet.create((theme) => ({
   toolWindowTitle: {
     fontSize: 13,
     fontWeight: theme.fontWeight.semibold,
-    color: "#dfe1e5",
+    color: theme.colors.foreground,
   },
   toolWindowTabActive: {
     flexDirection: "row",
@@ -3069,14 +3076,14 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: 10,
     height: 28,
     borderRadius: 4,
-    backgroundColor: "#1e1f22",
+    backgroundColor: theme.colors.surface0,
     borderBottomWidth: 2,
     borderBottomColor: "#3b82f6",
   },
   toolWindowTabText: {
     fontSize: 12,
     fontWeight: theme.fontWeight.medium,
-    color: "#dfe1e5",
+    color: theme.colors.foreground,
   },
   currentBranchPill: {
     paddingHorizontal: 8,
@@ -3103,9 +3110,9 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 4,
-    backgroundColor: "#35373b",
+    backgroundColor: theme.colors.surface1,
     borderWidth: 1,
-    borderColor: "#43454a",
+    borderColor: theme.colors.border,
   },
   headerConflictBtn: {
     borderColor: "rgba(245, 158, 11, 0.55)",
@@ -3118,7 +3125,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   headerActionBtnText: {
     fontSize: 11,
-    color: "#dfe1e5",
+    color: theme.colors.foreground,
     fontWeight: theme.fontWeight.medium,
   },
   closeBtn: {
@@ -3157,7 +3164,7 @@ const styles = StyleSheet.create((theme) => ({
   conflictBannerSub: {
     fontSize: 11,
     fontFamily: theme.fontFamily.mono,
-    color: "#dfe1e5",
+    color: theme.colors.foreground,
     flex: 1,
   },
   conflictBannerActions: {
@@ -3219,8 +3226,8 @@ const styles = StyleSheet.create((theme) => ({
   leftColumn: {
     width: 240,
     borderRightWidth: 1,
-    borderRightColor: "#31343b",
-    backgroundColor: "#25262a",
+    borderRightColor: theme.colors.border,
+    backgroundColor: theme.colors.surface1,
     flexDirection: "column",
   },
   refFilterBox: {
@@ -3229,16 +3236,16 @@ const styles = StyleSheet.create((theme) => ({
     gap: 6,
     paddingHorizontal: 8,
     height: 32,
-    backgroundColor: "#1e1f22",
+    backgroundColor: theme.colors.surface0,
     borderBottomWidth: 1,
-    borderBottomColor: "#31343b",
+    borderBottomColor: theme.colors.border,
   },
   refFilterInput: {
     flex: 1,
     minWidth: 0,
     width: 0,
     fontSize: 12,
-    color: "#dfe1e5",
+    color: theme.colors.foreground,
     paddingVertical: 0,
     ...(isWeb ? ({ outlineStyle: "none" } as any) : null),
   },
@@ -3263,7 +3270,7 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     fontSize: 12,
     fontWeight: theme.fontWeight.medium,
-    color: "#b4b8c2",
+    color: theme.colors.foregroundMuted,
   },
   refGroupAddBtn: {
     padding: 2,
@@ -3279,7 +3286,7 @@ const styles = StyleSheet.create((theme) => ({
   branchFolderText: {
     flex: 1,
     fontSize: 12,
-    color: "#cbd5e1",
+    color: theme.colors.foregroundMuted,
   },
   refTreeItem: {
     flexDirection: "row",
@@ -3293,19 +3300,19 @@ const styles = StyleSheet.create((theme) => ({
     paddingLeft: 34,
   },
   refTreeItemSelected: {
-    backgroundColor: "#2d4f7c",
+    backgroundColor: theme.colorScheme === "dark" ? "#2d4f7c" : "rgba(59, 130, 246, 0.16)",
   },
   refTreeItemText: {
     flex: 1,
     fontSize: 12,
-    color: "#dfe1e5",
+    color: theme.colors.foreground,
   },
   refTreeItemCurrentText: {
     color: "#10b981",
     fontWeight: theme.fontWeight.semibold,
   },
   refTreeItemSelectedText: {
-    color: "#ffffff",
+    color: theme.colorScheme === "dark" ? "#ffffff" : theme.colors.foreground,
   },
   aheadBehindBadge: {
     fontSize: 10,
@@ -3314,15 +3321,15 @@ const styles = StyleSheet.create((theme) => ({
   },
   leftFooterActionsDock: {
     padding: 8,
-    backgroundColor: "#1e1f22",
+    backgroundColor: theme.colors.surface0,
     borderTopWidth: 1,
-    borderTopColor: "#31343b",
+    borderTopColor: theme.colors.border,
     gap: 6,
   },
   leftFooterDockTitle: {
     fontSize: 11,
     fontFamily: theme.fontFamily.mono,
-    color: "#94a3b8",
+    color: theme.colors.foregroundMuted,
   },
   leftFooterPillsRow: {
     flexDirection: "row",
@@ -3336,22 +3343,22 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: 6,
     paddingVertical: 3,
     borderRadius: 4,
-    backgroundColor: "#2b2d30",
+    backgroundColor: theme.colors.surface2,
     borderWidth: 1,
-    borderColor: "#393b40",
+    borderColor: theme.colors.border,
   },
   miniActionPillDanger: {
     borderColor: "rgba(244, 63, 94, 0.45)",
   },
   miniActionPillText: {
     fontSize: 11,
-    color: "#dfe1e5",
+    color: theme.colors.foreground,
   },
   centerColumn: {
     flex: 1.55,
     borderRightWidth: 1,
-    borderRightColor: "#31343b",
-    backgroundColor: "#1e1f22",
+    borderRightColor: theme.colors.border,
+    backgroundColor: theme.colors.surface0,
     flexDirection: "column",
     minWidth: 0,
   },
@@ -3361,9 +3368,9 @@ const styles = StyleSheet.create((theme) => ({
     gap: 8,
     paddingHorizontal: 10,
     height: 32,
-    backgroundColor: "#25262a",
+    backgroundColor: theme.colors.surface1,
     borderBottomWidth: 1,
-    borderBottomColor: "#31343b",
+    borderBottomColor: theme.colors.border,
   },
   pycharmSearchBox: {
     flex: 1,
@@ -3375,16 +3382,16 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: 8,
     height: 24,
     borderRadius: 4,
-    backgroundColor: "#1e1f22",
+    backgroundColor: theme.colors.surface0,
     borderWidth: 1,
-    borderColor: "#393b40",
+    borderColor: theme.colors.border,
   },
   pycharmSearchInput: {
     flex: 1,
     minWidth: 0,
     width: 0,
     fontSize: 12,
-    color: "#dfe1e5",
+    color: theme.colors.foreground,
     paddingVertical: 0,
     ...(isWeb ? ({ outlineStyle: "none" } as any) : null),
   },
@@ -3392,7 +3399,7 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 0,
     fontSize: 10,
     fontFamily: theme.fontFamily.mono,
-    color: "#64748b",
+    color: theme.colors.foregroundMuted,
   },
   filterDropdownPill: {
     flexShrink: 0,
@@ -3405,11 +3412,11 @@ const styles = StyleSheet.create((theme) => ({
   },
   filterDropdownLabel: {
     fontSize: 12,
-    color: "#94a3b8",
+    color: theme.colors.foregroundMuted,
   },
   filterDropdownValue: {
     fontSize: 12,
-    color: "#dfe1e5",
+    color: theme.colors.foreground,
     fontWeight: theme.fontWeight.medium,
     maxWidth: 120,
   },
@@ -3421,7 +3428,7 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: 8,
     height: 24,
     borderRadius: 4,
-    backgroundColor: "#1e1f22",
+    backgroundColor: theme.colors.surface0,
     borderWidth: 1,
     borderColor: "#06b6d4",
     minWidth: 150,
@@ -3432,7 +3439,7 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
     width: 0,
     fontSize: 12,
-    color: "#dfe1e5",
+    color: theme.colors.foreground,
     paddingVertical: 0,
     ...(isWeb ? ({ outlineStyle: "none" } as any) : null),
   },
@@ -3468,7 +3475,7 @@ const styles = StyleSheet.create((theme) => ({
     paddingRight: 10,
   },
   commitRowSelected: {
-    backgroundColor: "#2d4f7c",
+    backgroundColor: theme.colorScheme === "dark" ? "#2d4f7c" : "rgba(59, 130, 246, 0.16)",
   },
   commitRowSubjectCol: {
     flex: 1,
@@ -3483,11 +3490,11 @@ const styles = StyleSheet.create((theme) => ({
   commitSubjectText: {
     flex: 1,
     fontSize: 12.5,
-    color: "#dfe1e5",
+    color: theme.colors.foreground,
     minWidth: 0,
   },
   commitSubjectTextSelected: {
-    color: "#ffffff",
+    color: theme.colorScheme === "dark" ? "#ffffff" : theme.colors.foreground,
   },
   inlineRefBadgesGroup: {
     flexDirection: "row",
@@ -3502,9 +3509,9 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: 6,
     paddingVertical: 1,
     borderRadius: 3,
-    backgroundColor: "#2b2d30",
+    backgroundColor: theme.colors.surface2,
     borderWidth: 1,
-    borderColor: "#393b40",
+    borderColor: theme.colors.border,
     maxWidth: 150,
   },
   pycharmRefBadgeHead: {
@@ -3515,28 +3522,28 @@ const styles = StyleSheet.create((theme) => ({
   },
   pycharmRefBadgeText: {
     fontSize: 11,
-    color: "#b4b8c2",
+    color: theme.colors.foregroundMuted,
   },
   commitAuthorCol: {
     width: 110,
     fontSize: 12,
-    color: "#94a3b8",
+    color: theme.colors.foregroundMuted,
     paddingRight: 8,
     flexShrink: 0,
   },
   commitDateCol: {
     width: 112,
     fontSize: 12,
-    color: "#94a3b8",
+    color: theme.colors.foregroundMuted,
     textAlign: "right",
     flexShrink: 0,
   },
   commitMetaSelected: {
-    color: "#e2e8f0",
+    color: theme.colorScheme === "dark" ? "#e2e8f0" : theme.colors.foreground,
   },
   rightColumn: {
     width: 390,
-    backgroundColor: "#25262a",
+    backgroundColor: theme.colors.surface1,
     flexDirection: "column",
     minWidth: 0,
   },
@@ -3544,7 +3551,7 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1.15,
     flexDirection: "column",
     borderBottomWidth: 1,
-    borderBottomColor: "#31343b",
+    borderBottomColor: theme.colors.border,
     minHeight: 0,
   },
   rightFilesToolbar: {
@@ -3553,9 +3560,9 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: "space-between",
     paddingHorizontal: 10,
     height: 32,
-    backgroundColor: "#2b2d30",
+    backgroundColor: theme.colors.surface2,
     borderBottomWidth: 1,
-    borderBottomColor: "#31343b",
+    borderBottomColor: theme.colors.border,
   },
   rightFilesToolbarLeft: {
     flexDirection: "row",
@@ -3567,7 +3574,7 @@ const styles = StyleSheet.create((theme) => ({
   filesCountLabel: {
     flexShrink: 0,
     fontSize: 12,
-    color: "#94a3b8",
+    color: theme.colors.foregroundMuted,
     fontWeight: theme.fontWeight.medium,
   },
   contextModePill: {
@@ -3577,14 +3584,14 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
-    backgroundColor: "#1e1f22",
+    backgroundColor: theme.colors.surface0,
     borderWidth: 1,
-    borderColor: "#393b40",
+    borderColor: theme.colors.border,
   },
   contextModePillText: {
     fontSize: 11,
     fontFamily: theme.fontFamily.mono,
-    color: "#dfe1e5",
+    color: theme.colors.foreground,
   },
   rightFilesToolbarRight: {
     flexShrink: 0,
@@ -3632,11 +3639,11 @@ const styles = StyleSheet.create((theme) => ({
   fileDirPathText: {
     flexShrink: 1,
     fontSize: 12,
-    color: "#dfe1e5",
+    color: theme.colors.foreground,
   },
   fileDirCountText: {
     fontSize: 11,
-    color: "#64748b",
+    color: theme.colors.foregroundMuted,
     marginLeft: 4,
   },
   fileTreeLeafRow: {
@@ -3650,7 +3657,7 @@ const styles = StyleSheet.create((theme) => ({
     paddingLeft: 28,
   },
   fileTreeLeafSelected: {
-    backgroundColor: "#2d4f7c",
+    backgroundColor: theme.colorScheme === "dark" ? "#2d4f7c" : "rgba(59, 130, 246, 0.16)",
   },
   fileTreeLeafName: {
     flex: 1,
@@ -3659,7 +3666,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   fileTreeLeafDirHint: {
     fontSize: 11,
-    color: "#64748b",
+    color: theme.colors.foregroundMuted,
     maxWidth: 110,
   },
   commitFileStats: {
@@ -3685,7 +3692,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   rightBottomDetailsPane: {
     flex: 0.85,
-    backgroundColor: "#1e1f22",
+    backgroundColor: theme.colors.surface0,
     flexDirection: "column",
     minHeight: 0,
   },
@@ -3700,7 +3707,7 @@ const styles = StyleSheet.create((theme) => ({
     paddingBottom: 10,
     marginBottom: 10,
     borderBottomWidth: 1,
-    borderBottomColor: "#2b2d30",
+    borderBottomColor: theme.colors.border,
   },
   compactOpPill: {
     flexDirection: "row",
@@ -3709,24 +3716,24 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: 7,
     paddingVertical: 3,
     borderRadius: 4,
-    backgroundColor: "#2b2d30",
+    backgroundColor: theme.colors.surface2,
     borderWidth: 1,
-    borderColor: "#393b40",
+    borderColor: theme.colors.border,
   },
   compactOpPillText: {
     fontSize: 11,
-    color: "#dfe1e5",
+    color: theme.colors.foreground,
   },
   pycharmCommitSubjectTitle: {
     fontSize: 13.5,
     fontWeight: theme.fontWeight.semibold,
-    color: "#dfe1e5",
+    color: theme.colors.foreground,
     lineHeight: 19,
     marginBottom: 8,
   },
   pycharmCommitBodyText: {
     fontSize: 12.5,
-    color: "#cbd5e1",
+    color: theme.colors.foregroundMuted,
     lineHeight: 18,
     marginBottom: 12,
   },
@@ -3734,7 +3741,7 @@ const styles = StyleSheet.create((theme) => ({
     marginTop: 6,
     paddingTop: 8,
     borderTopWidth: 1,
-    borderTopColor: "#2b2d30",
+    borderTopColor: theme.colors.border,
     gap: 4,
   },
   pycharmCommitFooterLine: {
@@ -3751,23 +3758,23 @@ const styles = StyleSheet.create((theme) => ({
   pycharmInlineShaText: {
     fontSize: 11.5,
     fontFamily: theme.fontFamily.mono,
-    color: "#94a3b8",
+    color: theme.colors.foregroundMuted,
   },
   pycharmCommitMetaFooter: {
     fontSize: 11.5,
-    color: "#64748b",
+    color: theme.colors.foregroundMuted,
   },
   pycharmInBranchesText: {
     fontSize: 11,
-    color: "#64748b",
+    color: theme.colors.foregroundMuted,
   },
   inlinePromptBox: {
     marginBottom: 10,
     padding: 8,
     borderRadius: 4,
-    backgroundColor: "#25262a",
+    backgroundColor: theme.colors.surface1,
     borderWidth: 1,
-    borderColor: "#393b40",
+    borderColor: theme.colors.border,
   },
   resetModePrompt: {
     gap: 6,
@@ -3777,7 +3784,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   promptTitle: {
     fontSize: 11,
-    color: "#dfe1e5",
+    color: theme.colors.foreground,
     fontWeight: theme.fontWeight.medium,
   },
   resetButtonsRow: {
@@ -3789,9 +3796,9 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 4,
-    backgroundColor: "#2b2d30",
+    backgroundColor: theme.colors.surface2,
     borderWidth: 1,
-    borderColor: "#393b40",
+    borderColor: theme.colors.border,
   },
   resetModeChoiceDanger: {
     borderColor: "#f43f5e",
@@ -3800,7 +3807,7 @@ const styles = StyleSheet.create((theme) => ({
   resetModeChoiceText: {
     fontSize: 11,
     fontWeight: theme.fontWeight.semibold,
-    color: "#dfe1e5",
+    color: theme.colors.foreground,
   },
   promptInputRow: {
     flexDirection: "row",
@@ -3814,11 +3821,11 @@ const styles = StyleSheet.create((theme) => ({
     height: 26,
     paddingHorizontal: 8,
     borderRadius: 4,
-    backgroundColor: "#1e1f22",
+    backgroundColor: theme.colors.surface0,
     borderWidth: 1,
-    borderColor: "#393b40",
+    borderColor: theme.colors.border,
     fontSize: 12,
-    color: "#dfe1e5",
+    color: theme.colors.foreground,
     ...(isWeb ? ({ outlineStyle: "none" } as any) : null),
   },
   promptConfirmBtn: {
@@ -3841,7 +3848,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   promptCancelText: {
     fontSize: 11,
-    color: "#94a3b8",
+    color: theme.colors.foregroundMuted,
   },
   emptyCenterBox: {
     flex: 1,
@@ -3856,7 +3863,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   emptyText: {
     fontSize: 12,
-    color: "#64748b",
+    color: theme.colors.foregroundMuted,
   },
   errorText: {
     fontSize: 12,
@@ -3878,10 +3885,10 @@ const styles = StyleSheet.create((theme) => ({
     width: "100%",
     maxWidth: 1680,
     height: "96%",
-    backgroundColor: "#1e1f22",
+    backgroundColor: theme.colors.surface0,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: "#393b40",
+    borderColor: theme.colors.border,
     overflow: "hidden",
     flexDirection: "column",
   },
@@ -3891,9 +3898,9 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: "space-between",
     paddingHorizontal: 12,
     height: 38,
-    backgroundColor: "#2b2d30",
+    backgroundColor: theme.colors.surface2,
     borderBottomWidth: 1,
-    borderBottomColor: "#393b40",
+    borderBottomColor: theme.colors.border,
   },
   repoDiffHeaderLeft: {
     flexDirection: "row",
@@ -3905,17 +3912,17 @@ const styles = StyleSheet.create((theme) => ({
   repoDiffWindowTitle: {
     fontSize: 13,
     fontWeight: theme.fontWeight.semibold,
-    color: "#dfe1e5",
+    color: theme.colors.foreground,
   },
   repoDiffNavGroup: {
     flexDirection: "row",
     alignItems: "center",
     gap: 2,
-    backgroundColor: "#1e1f22",
+    backgroundColor: theme.colors.surface0,
     padding: 2,
     borderRadius: 4,
     borderWidth: 1,
-    borderColor: "#393b40",
+    borderColor: theme.colors.border,
   },
   repoDiffNavBtn: {
     padding: 4,
@@ -3925,18 +3932,18 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: "#1e1f22",
+    backgroundColor: theme.colors.surface0,
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
     borderWidth: 1,
-    borderColor: "#393b40",
+    borderColor: theme.colors.border,
     maxWidth: 520,
   },
   repoDiffFileCounterText: {
     fontSize: 11.5,
     fontFamily: theme.fontFamily.mono,
-    color: "#cbd5e1",
+    color: theme.colors.foregroundMuted,
     maxWidth: 420,
   },
   repoDiffHeaderRight: {
@@ -3947,7 +3954,7 @@ const styles = StyleSheet.create((theme) => ({
   repoDiffBody: {
     flex: 1,
     minHeight: 0,
-    backgroundColor: "#1e1f22",
+    backgroundColor: theme.colors.surface0,
   },
   inlineBranchCheckoutBtn: {
     paddingHorizontal: 6,
@@ -4002,13 +4009,13 @@ const styles = StyleSheet.create((theme) => ({
   statusFeedbackText: {
     fontSize: 11.5,
     fontWeight: theme.fontWeight.medium,
-    color: "#dfe1e5",
+    color: theme.colors.foreground,
     flex: 1,
   },
   topPromptBar: {
     paddingHorizontal: 14,
     paddingVertical: 8,
-    backgroundColor: "#25262a",
+    backgroundColor: theme.colors.surface1,
     borderBottomWidth: 1,
     borderBottomColor: "#3b82f6",
   },
@@ -4021,11 +4028,11 @@ const styles = StyleSheet.create((theme) => ({
   topPromptTitle: {
     fontSize: 11.5,
     fontWeight: theme.fontWeight.semibold,
-    color: "#dfe1e5",
+    color: theme.colors.foreground,
   },
   topPromptMessage: {
     fontSize: 11.5,
-    color: "#94a3b8",
+    color: theme.colors.foregroundMuted,
     flex: 1,
     minWidth: 180,
   },
@@ -4036,14 +4043,14 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 4,
-    backgroundColor: "#2b2d30",
+    backgroundColor: theme.colors.surface2,
     borderWidth: 1,
     borderColor: "#3b82f6",
   },
   resetFiltersBtnText: {
     fontSize: 11.5,
     fontWeight: theme.fontWeight.medium,
-    color: "#60a5fa",
+    color: "#3b82f6",
   },
   inlineBranchActionStrip: {
     flexDirection: "row",
@@ -4055,7 +4062,7 @@ const styles = StyleSheet.create((theme) => ({
     marginHorizontal: 8,
     marginBottom: 4,
     borderRadius: 6,
-    backgroundColor: "#25262a",
+    backgroundColor: theme.colors.surface0,
     borderWidth: 1,
     borderColor: "rgba(6, 182, 212, 0.28)",
   },
@@ -4089,7 +4096,7 @@ const styles = StyleSheet.create((theme) => ({
   inlineBranchNeutralText: {
     fontSize: 10,
     fontWeight: theme.fontWeight.medium,
-    color: "#cbd5e1",
+    color: theme.colors.foregroundMuted,
   },
   inlineBranchDangerBtn: {
     flexDirection: "row",
