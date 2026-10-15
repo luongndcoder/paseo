@@ -2367,7 +2367,11 @@ export function NewWorkspaceScreen({
     },
   });
 
-  const importSession = useImportSession({ serverId: selectedServerId });
+  const importSession = useImportSession({
+    serverId: selectedServerId,
+    cwd: selectedSourceDirectory ?? workspace?.workspaceDirectory ?? undefined,
+    workspaceId: workspace?.id ?? undefined,
+  });
 
   const composer = isTerminalLaunch ? (
     <Composer

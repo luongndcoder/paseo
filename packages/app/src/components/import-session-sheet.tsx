@@ -245,15 +245,7 @@ function RefreshAction({ isRefreshing, onPress }: { isRefreshing: boolean; onPre
   );
 }
 
-function ScopeSubtitle({
-  hostLabel,
-  isScoped,
-  onShowAll,
-}: {
-  hostLabel: string;
-  isScoped: boolean;
-  onShowAll: () => void;
-}) {
+function ScopeSubtitle({ hostLabel, isScoped }: { hostLabel: string; isScoped: boolean }) {
   const { t } = useTranslation();
   return (
     <View style={styles.subtitleRow}>
@@ -262,17 +254,6 @@ function ScopeSubtitle({
           ? t("importSession.scope.workspace")
           : t("importSession.scope.host", { host: hostLabel })}
       </Text>
-      {isScoped ? (
-        <Button
-          variant="ghost"
-          size="xs"
-          onPress={onShowAll}
-          testID="import-session-show-all"
-          style={styles.subtitleAction}
-        >
-          {t("importSession.actions.showAll")}
-        </Button>
-      ) : null}
     </View>
   );
 }
@@ -417,21 +398,16 @@ export function ImportSessionSheet({
   const queryClient = useQueryClient();
   const { theme } = useUnistyles();
 
-  // "Show all" widens a workspace-scoped sheet to the whole host. The sheet's own
-  // `cwd` stays the scope it was opened with, because that is what decides where
-  // an imported agent lands.
-  const [isShowingAllDirectories, setIsShowingAllDirectories] = useState(false);
   const [searchInput, setSearchInput] = useState("");
   const [pageLimit, setPageLimit] = useState(PER_PROVIDER_LIMIT);
   const [selectedProvider, setSelectedProvider] = useState<string>(ALL_FILTER_VALUE);
 
-  const scopeCwd = isShowingAllDirectories ? null : (cwd ?? null);
+  const scopeCwd = cwd ?? null;
   const supportsSearch = useHostFeature(serverId, "importSessionSearch");
   const query = useDebouncedValue(supportsSearch ? searchInput : "", SEARCH_DEBOUNCE_MS).trim();
 
   useEffect(() => {
     if (visible) return;
-    setIsShowingAllDirectories(false);
     setSearchInput("");
   }, [visible]);
 
@@ -618,10 +594,10 @@ export function ImportSessionSheet({
     },
     onSuccess: ({ agent, target }) => {
       onClose();
-      if (target.crossWorkspace) {
+      if (target.crossWorkspace || !onImportedAgent) {
         onImported?.(agent);
       } else {
-        onImportedAgent?.(agent.id);
+        onImportedAgent(agent.id);
       }
       void queryClient.invalidateQueries({
         queryKey: sessionsQueryRoot,
@@ -663,7 +639,6 @@ export function ImportSessionSheet({
     [pageLimit, query, queryClient, scopeCwd],
   );
 
-  const handleShowAll = useCallback(() => setIsShowingAllDirectories(true), []);
   const handleLoadMore = useCallback(() => setPageLimit(nextPageLimit), []);
 
   const hosts = useHosts();
@@ -675,13 +650,7 @@ export function ImportSessionSheet({
   const header = useMemo<SheetHeader>(
     () => ({
       title: t("importSession.title"),
-      subtitle: (
-        <ScopeSubtitle
-          hostLabel={hostLabel}
-          isScoped={scopeCwd !== null}
-          onShowAll={handleShowAll}
-        />
-      ),
+      subtitle: <ScopeSubtitle hostLabel={hostLabel} isScoped={scopeCwd !== null} />,
       ...(supportsSearch
         ? {
             search: {
@@ -696,7 +665,7 @@ export function ImportSessionSheet({
         : {}),
       actions: <RefreshAction isRefreshing={isRefreshing} onPress={handleRefresh} />,
     }),
-    [handleRefresh, handleShowAll, hostLabel, isRefreshing, scopeCwd, supportsSearch, t, visible],
+    [handleRefresh, hostLabel, isRefreshing, scopeCwd, supportsSearch, t, visible],
   );
 
   const isSnapshotUnsupported = requiresHostUpgrade;

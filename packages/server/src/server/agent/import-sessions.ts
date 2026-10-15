@@ -123,10 +123,12 @@ export async function listImportableProviderSessions(
   const limit = request.limit ?? 20;
   const sinceTimestamp = parseRecentProviderSessionsSince(request.since);
   const providerFilter = request.providers ? new Set(request.providers) : undefined;
+  const matchesRequestCwd = request.cwd ? createRealpathAwarePathMatcher(request.cwd) : null;
   const importedSessions = await collectImportedProviderSessions(
     agentManager,
     agentStorage,
     providerFilter,
+    matchesRequestCwd,
   );
   const importedHandles = importedSessions.handles;
   const query = normalizeImportSessionQuery(request.query);
@@ -141,7 +143,6 @@ export async function listImportableProviderSessions(
   });
   let filteredAlreadyImportedCount = 0;
   const candidates: ManagedImportableProviderSession[] = [];
-  const matchesRequestCwd = request.cwd ? createRealpathAwarePathMatcher(request.cwd) : null;
   for (const session of listing.sessions) {
     if (matchesRequestCwd && !matchesRequestCwd(session.cwd)) {
       continue;
@@ -344,6 +345,7 @@ async function collectImportedProviderSessions(
   agentManager: Pick<AgentManager, "listAgents">,
   agentStorage: Pick<AgentStorage, "list">,
   providerFilter: Set<string> | undefined,
+  matchesRequestCwd: ((candidateCwd: string) => boolean) | null = null,
 ): Promise<{ handles: Set<string>; count: number }> {
   const handles = new Set<string>();
   const sessions = new Set<string>();
@@ -353,24 +355,27 @@ async function collectImportedProviderSessions(
   const collect = (
     provider: AgentProvider | StoredAgentRecord["provider"] | string,
     persistence: AgentPersistenceHandle | null | undefined,
+    recordCwd: string | undefined,
   ) => {
     if (!persistence || (providerFilter && !providerFilter.has(provider))) return;
-    sessions.add(toProviderSessionHandleKey(provider, persistence.sessionId));
     collectProviderSessionHandleKeys(handles, provider, persistence);
+    if (!recordCwd || !matchesRequestCwd || matchesRequestCwd(recordCwd)) {
+      sessions.add(toProviderSessionHandleKey(provider, persistence.sessionId));
+    }
   };
 
   for (const agent of agentManager.listAgents()) {
     if (storedRecordsById.get(agent.id)?.archivedAt) {
       continue;
     }
-    collect(agent.provider, agent.persistence);
+    collect(agent.provider, agent.persistence, agent.cwd ?? agent.config?.cwd);
   }
 
   for (const record of records) {
     if (record.archivedAt) {
       continue;
     }
-    collect(record.provider, record.persistence);
+    collect(record.provider, record.persistence, record.cwd);
   }
 
   return { handles, count: sessions.size };

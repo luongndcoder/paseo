@@ -1685,7 +1685,9 @@ export class ClaudeAgentClient implements AgentClient {
       rootIsProjectDir: Boolean(options?.cwd),
     });
     const parsed = await Promise.all(
-      candidates.map((candidate) => parseClaudeSessionDescriptor(candidate.path, candidate.mtime)),
+      candidates.map((candidate) =>
+        parseClaudeSessionDescriptor(candidate.path, candidate.mtime, candidate.size),
+      ),
     );
     return parsed
       .filter((session): session is ImportableProviderSession => session !== null)
@@ -6427,6 +6429,35 @@ function createAsyncMessageInput<T>(): AsyncMessageInput<T> {
 interface ClaudeSessionCandidate {
   path: string;
   mtime: Date;
+  size: number;
+}
+
+const CLAUDE_DESCRIPTOR_CACHE_MAX_ENTRIES = 2_000;
+const CLAUDE_FAST_DESCRIPTOR_THRESHOLD_BYTES = 512 * 1024;
+const CLAUDE_FAST_DESCRIPTOR_WINDOW_BYTES = 256 * 1024;
+
+interface CachedClaudeSessionDescriptor {
+  mtimeMs: number;
+  size: number;
+  descriptor: Omit<ImportableProviderSession, "lastActivityAt"> | null;
+}
+
+const claudeSessionDescriptorCache = new Map<string, CachedClaudeSessionDescriptor>();
+
+function setCachedClaudeSessionDescriptor(
+  filePath: string,
+  entry: CachedClaudeSessionDescriptor,
+): void {
+  if (
+    !claudeSessionDescriptorCache.has(filePath) &&
+    claudeSessionDescriptorCache.size >= CLAUDE_DESCRIPTOR_CACHE_MAX_ENTRIES
+  ) {
+    const oldestKey = claudeSessionDescriptorCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      claudeSessionDescriptorCache.delete(oldestKey);
+    }
+  }
+  claudeSessionDescriptorCache.set(filePath, entry);
 }
 
 async function pathExists(target: string): Promise<boolean> {
@@ -6472,7 +6503,7 @@ async function collectRecentClaudeSessions(
     fileEntries.map(async (fullPath) => {
       try {
         const fileStats = await fsPromises.stat(fullPath);
-        return { path: fullPath, mtime: fileStats.mtime };
+        return { path: fullPath, mtime: fileStats.mtime, size: fileStats.size };
       } catch {
         return null;
       }
@@ -6549,15 +6580,73 @@ function applyClaudeSessionEntryToAccumulator(
   }
 }
 
+async function readClaudeSessionHeadAndTail(
+  filePath: string,
+  size: number,
+): Promise<string | null> {
+  let handle: Awaited<ReturnType<typeof fsPromises.open>> | null = null;
+  try {
+    handle = await fsPromises.open(filePath, "r");
+    const headBytes = Math.min(CLAUDE_FAST_DESCRIPTOR_WINDOW_BYTES, size);
+    const tailBytes = Math.min(CLAUDE_FAST_DESCRIPTOR_WINDOW_BYTES, size - headBytes);
+    const headBuffer = Buffer.allocUnsafe(headBytes);
+    const headRead = await handle.read(headBuffer, 0, headBytes, 0);
+    let headText = headBuffer.subarray(0, headRead.bytesRead).toString("utf8");
+    const lastHeadNewline = headText.lastIndexOf("\n");
+    if (lastHeadNewline !== -1) {
+      headText = headText.slice(0, lastHeadNewline);
+    }
+
+    if (tailBytes <= 0) {
+      return headText;
+    }
+
+    const tailBuffer = Buffer.allocUnsafe(tailBytes);
+    const tailOffset = Math.max(headBytes, size - tailBytes);
+    const tailRead = await handle.read(tailBuffer, 0, tailBytes, tailOffset);
+    let tailText = tailBuffer.subarray(0, tailRead.bytesRead).toString("utf8");
+    const firstTailNewline = tailText.indexOf("\n");
+    if (firstTailNewline !== -1) {
+      tailText = tailText.slice(firstTailNewline + 1);
+    }
+    return `${headText}\n${tailText}`;
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+function parseClaudeSessionLinesIntoAccumulator(
+  content: string,
+  acc: ClaudeSessionDescriptorAccumulator,
+): void {
+  for (const line of content.split(/\r?\n/)) {
+    if (!line || !shouldParseClaudeSessionDescriptorLine(line, acc)) continue;
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    applyClaudeSessionEntryToAccumulator(entry, acc);
+  }
+}
+
 async function parseClaudeSessionDescriptor(
   filePath: string,
   mtime: Date,
+  size?: number,
 ): Promise<ImportableProviderSession | null> {
-  let content: string;
-  try {
-    content = await fsPromises.readFile(filePath, "utf8");
-  } catch {
-    return null;
+  const mtimeMs = mtime.getTime();
+  const cached = claudeSessionDescriptorCache.get(filePath);
+  if (cached && cached.mtimeMs === mtimeMs && (size === undefined || cached.size === size)) {
+    return cached.descriptor
+      ? {
+          ...cached.descriptor,
+          lastActivityAt: mtime,
+        }
+      : null;
   }
 
   const acc: ClaudeSessionDescriptorAccumulator = {
@@ -6570,24 +6659,46 @@ async function parseClaudeSessionDescriptor(
     lastPromptPreview: null,
   };
 
-  for (const line of content.split(/\r?\n/)) {
-    if (!line || !shouldParseClaudeSessionDescriptorLine(line, acc)) continue;
-    let entry: unknown;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
+  let usedFastRead = false;
+  if (size !== undefined && size > CLAUDE_FAST_DESCRIPTOR_THRESHOLD_BYTES) {
+    const partialContent = await readClaudeSessionHeadAndTail(filePath, size);
+    if (partialContent !== null) {
+      usedFastRead = true;
+      parseClaudeSessionLinesIntoAccumulator(partialContent, acc);
     }
-    applyClaudeSessionEntryToAccumulator(entry, acc);
+  }
+
+  if (!usedFastRead || !acc.sessionId || !acc.cwd) {
+    let content: string;
+    try {
+      content = await fsPromises.readFile(filePath, "utf8");
+    } catch {
+      return null;
+    }
+    acc.sessionId = null;
+    acc.cwd = null;
+    acc.customTitle = null;
+    acc.aiTitle = null;
+    acc.firstPromptTitle = null;
+    acc.firstPromptPreview = null;
+    acc.lastPromptPreview = null;
+    parseClaudeSessionLinesIntoAccumulator(content, acc);
   }
 
   const { sessionId, cwd } = acc;
 
   if (!sessionId || !cwd) {
+    if (size !== undefined) {
+      setCachedClaudeSessionDescriptor(filePath, {
+        mtimeMs,
+        size,
+        descriptor: null,
+      });
+    }
     return null;
   }
 
-  return {
+  const descriptorBase: Omit<ImportableProviderSession, "lastActivityAt"> = {
     providerHandleId: sessionId,
     cwd,
     title:
@@ -6597,6 +6708,18 @@ async function parseClaudeSessionDescriptor(
       `Claude session ${sessionId.slice(0, 8)}`,
     firstPromptPreview: acc.firstPromptPreview,
     lastPromptPreview: acc.lastPromptPreview,
+  };
+
+  if (size !== undefined) {
+    setCachedClaudeSessionDescriptor(filePath, {
+      mtimeMs,
+      size,
+      descriptor: descriptorBase,
+    });
+  }
+
+  return {
+    ...descriptorBase,
     lastActivityAt: mtime,
   };
 }

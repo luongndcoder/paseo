@@ -322,6 +322,54 @@ test("listImportableProviderSessions looks past already-imported rows to fill th
   expect(result.filteredAlreadyImportedCount).toBe(1);
 });
 
+test("listImportableProviderSessions does not inflate listingLimit with imported sessions from other projects", async () => {
+  const cwd = "/tmp/project-a";
+  const available = makeImportableSession({
+    provider: "claude",
+    sessionId: "available-a",
+    cwd,
+    lastActivityAt: "2026-04-30T12:01:00.000Z",
+  });
+  const listImportableSessions = vi.fn(async () => makeImportableSessionsResult([available]));
+
+  await listImportableProviderSessions({
+    request: makeRequest({ cwd, providers: ["claude"], limit: 5 }),
+    agentManager: {
+      listAgents: () => [],
+      listImportableSessions,
+    },
+    agentStorage: {
+      list: async () => [
+        {
+          id: "agent-a",
+          provider: "claude",
+          cwd: "/tmp/project-a",
+          persistence: { provider: "claude", sessionId: "imported-a" },
+        } as StoredAgentRecord,
+        {
+          id: "agent-b",
+          provider: "claude",
+          cwd: "/tmp/project-b",
+          persistence: { provider: "claude", sessionId: "imported-b" },
+        } as StoredAgentRecord,
+        {
+          id: "agent-c",
+          provider: "claude",
+          cwd: "/tmp/project-c",
+          persistence: { provider: "claude", sessionId: "imported-c" },
+        } as StoredAgentRecord,
+      ],
+    },
+    providerSnapshotManager: { getProviderLabel: () => "Claude Code" },
+  });
+
+  expect(listImportableSessions).toHaveBeenCalledWith({
+    limit: 6,
+    providerFilter: new Set(["claude"]),
+    cwd,
+  });
+});
+
 test("listImportableProviderSessions requests a bounded deep scan for search results", async () => {
   const matchingSessions = [
     makeImportableSession({

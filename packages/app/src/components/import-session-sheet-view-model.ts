@@ -41,7 +41,9 @@ export interface SessionsQueryResult {
 
 export function resolveProvidersToFetch(
   supportsSnapshot: boolean,
-  snapshotEntries: ReadonlyArray<{ provider: string; enabled?: boolean }> | undefined,
+  snapshotEntries:
+    | ReadonlyArray<{ provider: string; enabled?: boolean; status?: string }>
+    | undefined,
 ): AgentProvider[] | null {
   // COMPAT(providersSnapshot): the import-recent-sessions feature ships alongside
   // providersSnapshot (v0.1.48, 2026-04-05). Daemons older than that lack both —
@@ -49,7 +51,9 @@ export function resolveProvidersToFetch(
   // when the supported daemon floor is >= v0.1.48 (target: 2026-10-05).
   if (!supportsSnapshot) return null;
   if (!snapshotEntries) return null;
-  return snapshotEntries.filter((entry) => entry.enabled !== false).map((entry) => entry.provider);
+  return snapshotEntries
+    .filter((entry) => entry.enabled !== false && entry.status !== "unavailable")
+    .map((entry) => entry.provider);
 }
 
 export function buildProviderLabelMap(

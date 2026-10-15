@@ -58,19 +58,21 @@ describe("resolveProvidersToFetch", () => {
     expect(resolveProvidersToFetch(true, undefined)).toBeNull();
   });
 
-  it("returns enabled providers", () => {
+  it("returns enabled and available providers", () => {
     const providers = resolveProvidersToFetch(true, [
-      { provider: "claude" },
+      { provider: "claude", status: "ready" },
       { provider: "codex" },
       { provider: "opencode", enabled: false },
+      { provider: "pi", status: "unavailable" },
       { provider: "z-ai" },
     ]);
     expect(providers).toEqual(["claude", "codex", "z-ai"]);
   });
 
-  it("returns an empty array when snapshot has no enabled providers", () => {
+  it("returns an empty array when snapshot has no enabled or available providers", () => {
     const providers = resolveProvidersToFetch(true, [
       { provider: "claude", enabled: false },
+      { provider: "pi", status: "unavailable" },
       { provider: "z-ai", enabled: false },
     ]);
     expect(providers).toEqual([]);

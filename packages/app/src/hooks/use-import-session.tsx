@@ -1,11 +1,16 @@
 import { useCallback, useState, type ReactNode } from "react";
-import { type Href, useRouter } from "expo-router";
+import { type Href, useGlobalSearchParams, useRouter } from "expo-router";
 import { useTranslation } from "react-i18next";
 import { ImportSessionSheet } from "@/components/import-session-sheet";
 import { useHostChooser } from "@/hosts/host-chooser";
 import { useHostRuntimeClient } from "@/runtime/host-runtime";
 import { buildHostAgentDetailRoute } from "@/utils/host-routes";
 import { useOpenProject } from "@/hooks/use-open-project";
+import {
+  useActiveWorkspaceSelection,
+  useLastWorkspaceSelection,
+} from "@/stores/navigation-active-workspace-store";
+import { useWorkspace } from "@/stores/session-store-hooks";
 
 interface UseImportSessionOptions {
   serverId?: string;
@@ -54,6 +59,34 @@ export function useImportSession({
 }: UseImportSessionOptions = {}): UseImportSessionResult {
   const { t } = useTranslation();
   const chooseHost = useHostChooser();
+  const activeSelection = useActiveWorkspaceSelection();
+  const lastSelection = useLastWorkspaceSelection();
+  const globalParams = useGlobalSearchParams<{
+    serverId?: string;
+    sourceDirectory?: string;
+  }>();
+
+  const fallbackSelection = activeSelection ?? lastSelection;
+  const routeServerId =
+    typeof globalParams.serverId === "string" ? globalParams.serverId.trim() : "";
+  const routeSourceDirectory =
+    typeof globalParams.sourceDirectory === "string" ? globalParams.sourceDirectory.trim() : "";
+
+  const effectiveServerId =
+    serverId?.trim() || routeServerId || fallbackSelection?.serverId || undefined;
+  const fallbackWorkspace = useWorkspace(
+    effectiveServerId ?? null,
+    workspaceId ?? fallbackSelection?.workspaceId ?? null,
+  );
+  const effectiveCwd =
+    cwd?.trim() ||
+    routeSourceDirectory ||
+    fallbackWorkspace?.workspaceDirectory ||
+    fallbackWorkspace?.projectRootPath ||
+    undefined;
+  const effectiveWorkspaceId =
+    workspaceId?.trim() || fallbackWorkspace?.id || fallbackSelection?.workspaceId || undefined;
+
   const [importServerId, setImportServerId] = useState<string | null>(null);
   const [isSheetOpen, setIsSheetOpen] = useState(false);
   const client = useHostRuntimeClient(importServerId ?? "");
@@ -65,15 +98,15 @@ export function useImportSession({
   }, []);
 
   const open = useCallback(() => {
-    if (serverId) {
-      openForHost(serverId);
+    if (effectiveServerId) {
+      openForHost(effectiveServerId);
       return;
     }
     chooseHost({
       title: t("importSession.chooseHostTitle"),
       onChooseHost: openForHost,
     });
-  }, [chooseHost, openForHost, serverId, t]);
+  }, [chooseHost, effectiveServerId, openForHost, t]);
 
   const close = useCallback(() => setIsSheetOpen(false), []);
 
@@ -84,8 +117,8 @@ export function useImportSession({
         visible={isSheetOpen}
         client={client}
         serverId={importServerId}
-        cwd={cwd}
-        workspaceId={workspaceId}
+        cwd={effectiveCwd}
+        workspaceId={effectiveWorkspaceId}
         onClose={close}
         onImported={navigateToImportedAgent}
       />
