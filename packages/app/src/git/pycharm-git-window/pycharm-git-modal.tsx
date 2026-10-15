@@ -1282,7 +1282,9 @@ export function PyCharmGitModal({
           ? "#f43f5e"
           : f.status === "renamed"
             ? "#06b6d4"
-            : "#60a5fa";
+            : theme.colorScheme === "dark"
+              ? "#60a5fa"
+              : "#2563eb";
 
     return (
       <Pressable
@@ -1316,7 +1318,7 @@ export function PyCharmGitModal({
             hitSlop={4}
             testID={`open-repo-diff-${fileName}`}
           >
-            <Columns2 size={11} color="#94a3b8" />
+            <Columns2 size={11} color={theme.colors.foregroundMuted} />
           </Pressable>
         </View>
       </Pressable>
@@ -1358,7 +1360,7 @@ export function PyCharmGitModal({
                     }}
                     hitSlop={6}
                   >
-                    <X size={11} color="#94a3b8" />
+                    <X size={11} color={theme.colors.foregroundMuted} />
                   </Pressable>
                 ) : null}
               </View>
@@ -1454,7 +1456,7 @@ export function PyCharmGitModal({
                 disabled={loading || actionBusy}
                 testID="pycharm-git-refresh-btn"
               >
-                <RefreshCw size={13} color="#cbd5e1" />
+                <RefreshCw size={13} color={theme.colors.foregroundMuted} />
                 <Text style={styles.headerActionBtnText}>
                   {loading ? "Refreshing..." : "Refresh"}
                 </Text>
@@ -1482,7 +1484,7 @@ export function PyCharmGitModal({
                 onPress={onClose}
                 testID="pycharm-git-close-btn"
               >
-                <X size={16} color="#94a3b8" />
+                <X size={16} color={theme.colors.foregroundMuted} />
               </Pressable>
             </View>
           </View>
@@ -2889,7 +2891,7 @@ export function PyCharmGitModal({
                       )
                     }
                   >
-                    <ArrowUp size={13} color="#cbd5e1" />
+                    <ArrowUp size={13} color={theme.colors.foregroundMuted} />
                   </Pressable>
                   <Pressable
                     style={[styles.repoDiffNavBtn, hunkCount <= 1 && styles.btnDisabled]}
@@ -2898,7 +2900,7 @@ export function PyCharmGitModal({
                       setActiveHunkIndex((prev) => (hunkCount > 0 ? (prev + 1) % hunkCount : 0))
                     }
                   >
-                    <ArrowDown size={13} color="#cbd5e1" />
+                    <ArrowDown size={13} color={theme.colors.foregroundMuted} />
                   </Pressable>
                 </View>
 
@@ -2914,7 +2916,7 @@ export function PyCharmGitModal({
                     }}
                     testID="repo-diff-prev-file-btn"
                   >
-                    <ArrowLeft size={13} color="#cbd5e1" />
+                    <ArrowLeft size={13} color={theme.colors.foregroundMuted} />
                   </Pressable>
 
                   <Text style={styles.repoDiffFileCounterText} numberOfLines={1}>
@@ -2944,7 +2946,7 @@ export function PyCharmGitModal({
                     }}
                     testID="repo-diff-next-file-btn"
                   >
-                    <ArrowRight size={13} color="#cbd5e1" />
+                    <ArrowRight size={13} color={theme.colors.foregroundMuted} />
                   </Pressable>
                 </View>
               </View>
@@ -2955,7 +2957,7 @@ export function PyCharmGitModal({
                   onPress={() => setRepoDiffModalOpen(false)}
                   testID="repo-diff-close-btn"
                 >
-                  <X size={16} color="#cbd5e1" />
+                  <X size={16} color={theme.colors.foregroundMuted} />
                 </Pressable>
               </View>
             </View>

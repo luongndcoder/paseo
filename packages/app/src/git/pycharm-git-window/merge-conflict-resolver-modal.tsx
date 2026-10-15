@@ -16,7 +16,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
+import { StyleSheet, UnistylesRuntime } from "react-native-unistyles";
 
 import { isWeb } from "@/constants/platform";
 import { useToast } from "@/contexts/toast-context";
@@ -249,7 +249,7 @@ export function MergeConflictResolverModal({
   initialFilePath = null,
   onResolved,
 }: MergeConflictResolverModalProps) {
-  const { theme } = useUnistyles();
+  const theme = UnistylesRuntime.getTheme();
   const client = useHostRuntimeClient(serverId);
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -260,9 +260,7 @@ export function MergeConflictResolverModal({
   const [loading, setLoading] = useState<boolean>(false);
   const [actionBusy, setActionBusy] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [conflictData, setConflictData] = useState<CheckoutGitConflictFilePayload | null>(
-    null,
-  );
+  const [conflictData, setConflictData] = useState<CheckoutGitConflictFilePayload | null>(null);
   const [mergedContent, setMergedContent] = useState<string>("");
 
   useEffect(() => {
@@ -344,8 +342,7 @@ export function MergeConflictResolverModal({
 
   const activeConflicts = useMemo(() => {
     return parseConflictBlocks(mergedContent).filter(
-      (seg): seg is Extract<ConflictSegment, { kind: "conflict" }> =>
-        seg.kind === "conflict",
+      (seg): seg is Extract<ConflictSegment, { kind: "conflict" }> => seg.kind === "conflict",
     );
   }, [mergedContent]);
 
@@ -441,7 +438,17 @@ export function MergeConflictResolverModal({
     } finally {
       setActionBusy(false);
     }
-  }, [actionBusy, client, cwd, mergedContent, onResolved, queryClient, selectedFile, serverId, toast]);
+  }, [
+    actionBusy,
+    client,
+    cwd,
+    mergedContent,
+    onResolved,
+    queryClient,
+    selectedFile,
+    serverId,
+    toast,
+  ]);
 
   const handleContinueOperation = useCallback(async () => {
     if (!client || !cwd || actionBusy) return;
@@ -583,10 +590,7 @@ export function MergeConflictResolverModal({
                   <Pressable
                     key={filePath}
                     testID={`conflict-file-pill-${filePath}`}
-                    style={[
-                      styles.filePill,
-                      isActive && styles.filePillActive,
-                    ]}
+                    style={[styles.filePill, isActive && styles.filePillActive]}
                     onPress={() => setSelectedFile(filePath)}
                   >
                     <FileWarning
@@ -594,10 +598,7 @@ export function MergeConflictResolverModal({
                       color={isActive ? "#f59e0b" : theme.colors.foregroundMuted}
                     />
                     <Text
-                      style={[
-                        styles.filePillText,
-                        isActive && styles.filePillTextActive,
-                      ]}
+                      style={[styles.filePillText, isActive && styles.filePillTextActive]}
                       numberOfLines={1}
                     >
                       {filePath}
@@ -611,10 +612,7 @@ export function MergeConflictResolverModal({
           <View style={styles.wholeFileActions}>
             <Pressable
               testID="accept-all-yours-btn"
-              style={({ pressed }) => [
-                styles.wholeActionOursBtn,
-                pressed && styles.btnDimmed,
-              ]}
+              style={({ pressed }) => [styles.wholeActionOursBtn, pressed && styles.btnDimmed]}
               onPress={handleAcceptAllYours}
             >
               <Text style={styles.wholeActionOursText}>Accept All Yours</Text>
@@ -623,10 +621,7 @@ export function MergeConflictResolverModal({
 
             <Pressable
               testID="accept-all-theirs-btn"
-              style={({ pressed }) => [
-                styles.wholeActionTheirsBtn,
-                pressed && styles.btnDimmed,
-              ]}
+              style={({ pressed }) => [styles.wholeActionTheirsBtn, pressed && styles.btnDimmed]}
               onPress={handleAcceptAllTheirs}
             >
               <ArrowLeft size={11} color="#06b6d4" />
@@ -635,10 +630,7 @@ export function MergeConflictResolverModal({
 
             <Pressable
               testID="reset-working-conflict-btn"
-              style={({ pressed }) => [
-                styles.wholeActionResetBtn,
-                pressed && styles.btnDimmed,
-              ]}
+              style={({ pressed }) => [styles.wholeActionResetBtn, pressed && styles.btnDimmed]}
               onPress={handleResetToWorking}
             >
               <RotateCcw size={11} color={theme.colors.foregroundMuted} />
@@ -656,10 +648,8 @@ export function MergeConflictResolverModal({
               contentContainerStyle={styles.conflictBlocksRow}
             >
               {activeConflicts.map((block, idx) => {
-                const oursPreview =
-                  block.oursText.split(/\r?\n/)[0]?.trim() || "(empty)";
-                const theirsPreview =
-                  block.theirsText.split(/\r?\n/)[0]?.trim() || "(empty)";
+                const oursPreview = block.oursText.split(/\r?\n/)[0]?.trim() || "(empty)";
+                const theirsPreview = block.theirsText.split(/\r?\n/)[0]?.trim() || "(empty)";
 
                 return (
                   <View
@@ -668,9 +658,7 @@ export function MergeConflictResolverModal({
                     testID={`conflict-block-card-${idx + 1}`}
                   >
                     <View style={styles.conflictBlockHeader}>
-                      <Text style={styles.conflictBlockBadge}>
-                        Conflict #{idx + 1}
-                      </Text>
+                      <Text style={styles.conflictBlockBadge}>Conflict #{idx + 1}</Text>
                       <Text style={styles.conflictBlockPreview} numberOfLines={1}>
                         {oursPreview} ⇄ {theirsPreview}
                       </Text>
@@ -679,10 +667,7 @@ export function MergeConflictResolverModal({
                     <View style={styles.conflictBlockBtnRow}>
                       <Pressable
                         testID={`accept-yours-btn-${idx + 1}`}
-                        style={({ pressed }) => [
-                          styles.blockBtnOurs,
-                          pressed && styles.btnDimmed,
-                        ]}
+                        style={({ pressed }) => [styles.blockBtnOurs, pressed && styles.btnDimmed]}
                         onPress={() => handleResolveBlock(block.id, "ours")}
                       >
                         <Text style={styles.blockBtnOursText}>Accept Yours &gt;&gt;</Text>
@@ -701,10 +686,7 @@ export function MergeConflictResolverModal({
 
                       <Pressable
                         testID={`accept-both-btn-${idx + 1}`}
-                        style={({ pressed }) => [
-                          styles.blockBtnBoth,
-                          pressed && styles.btnDimmed,
-                        ]}
+                        style={({ pressed }) => [styles.blockBtnBoth, pressed && styles.btnDimmed]}
                         onPress={() => handleResolveBlock(block.id, "both")}
                       >
                         <Text style={styles.blockBtnBothText}>Accept Both</Text>
@@ -757,10 +739,7 @@ export function MergeConflictResolverModal({
             </View>
 
             {/* Center Pane: Merged Result (Editable) */}
-            <View
-              style={[styles.centerPane, styles.paneRightBorder]}
-              testID="conflict-pane-merged"
-            >
+            <View style={[styles.centerPane, styles.paneRightBorder]} testID="conflict-pane-merged">
               <View style={[styles.paneHeader, styles.paneHeaderCenter]}>
                 <View style={styles.paneHeaderTitleRow}>
                   <View style={[styles.paneAccentDot, { backgroundColor: "#f59e0b" }]} />
@@ -777,9 +756,7 @@ export function MergeConflictResolverModal({
                   onPress={() => void handleSaveAndMarkResolved()}
                 >
                   <Check size={12} color="#0f172a" />
-                  <Text style={styles.saveResolveBtnText}>
-                    Save &amp; Mark Resolved (git add)
-                  </Text>
+                  <Text style={styles.saveResolveBtnText}>Save &amp; Mark Resolved (git add)</Text>
                 </Pressable>
               </View>
 
