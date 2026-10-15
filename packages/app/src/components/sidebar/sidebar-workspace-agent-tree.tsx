@@ -2,7 +2,7 @@ import equal from "fast-deep-equal";
 import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, GitFork } from "lucide-react-native";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, Text, View, type GestureResponderEvent } from "react-native";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
+import { StyleSheet } from "react-native-unistyles";
 import { create } from "zustand";
 import { useStoreWithEqualityFn } from "zustand/traditional";
 import { ClaudeIcon } from "@/components/icons/claude-icon";
@@ -98,6 +98,13 @@ export function getProviderAccentTone(provider: string): ProviderAccentTone {
       text: "#14b8a6",
       border: "rgba(20, 184, 166, 0.42)",
       bg: "rgba(20, 184, 166, 0.14)",
+    };
+  }
+  if (normalized === "antigravity" || normalized.includes("antigravity")) {
+    return {
+      text: "#38bdf8",
+      border: "rgba(56, 189, 248, 0.42)",
+      bg: "rgba(56, 189, 248, 0.14)",
     };
   }
   return {
@@ -341,16 +348,21 @@ export function useWorkspaceAgentSidebarSummary(
         const considerAgent = (agent: Agent) => {
           if (seenIds.has(agent.id)) return;
           if (agent.archivedAt || pendingArchiveIds.has(agent.id)) return;
-          const matchesWorkspaceId =
-            Boolean(normalizedWorkspaceId) &&
-            normalizeWorkspaceOpaqueId(agent.workspaceId) === normalizedWorkspaceId;
-          const matchesDirectory =
+          const agentWorkspaceId = normalizeWorkspaceOpaqueId(agent.workspaceId);
+          if (agentWorkspaceId) {
+            if (Boolean(normalizedWorkspaceId) && agentWorkspaceId === normalizedWorkspaceId) {
+              seenIds.add(agent.id);
+              matching.push(agent);
+            }
+            return;
+          }
+          const matchesLegacyDirectory =
             Boolean(normalizedWorkspaceDir) &&
             Boolean(agent.cwd) &&
             normalizeWorkspacePath(agent.cwd) === normalizedWorkspaceDir;
           const matchesLayoutTab = layoutAgentIdSet.has(agent.id);
 
-          if (matchesWorkspaceId || matchesDirectory || matchesLayoutTab) {
+          if (matchesLegacyDirectory || matchesLayoutTab) {
             seenIds.add(agent.id);
             matching.push(agent);
           }
@@ -382,7 +394,10 @@ export function useWorkspaceAgentSidebarSummary(
     const byId = new Map(rawWorkspaceAgents.map((a) => [a.id, a]));
     return rawWorkspaceAgents
       .filter((agent) =>
-        isWorkspaceRootAgent(agent, agent.parentAgentId ? byId.get(agent.parentAgentId) : undefined),
+        isWorkspaceRootAgent(
+          agent,
+          agent.parentAgentId ? byId.get(agent.parentAgentId) : undefined,
+        ),
       )
       .map((a) => a.id);
   }, [rawWorkspaceAgents]);
@@ -503,17 +518,15 @@ export function useWorkspaceAgentSidebarSummary(
       };
     });
 
-    // If the workspace does not have a live root agent yet (e.g. draft tab or freshly opened workspace),
-    // synthesize the configured provider from the draft tab setup or user's preferred provider so the
-    // Provider Icon (Claude Code, Codex, Pi, etc.) is always visible in the sidebar.
-    if (rootAgents.length === 0) {
-      const fallbackProvider =
-        layoutAgentAndDraftInfo.draftProvider ?? preferences?.provider ?? "claude";
+    // If the workspace does not have a live root agent yet but has an explicit draft tab setup,
+    // synthesize the configured provider from that workspace's own draft tab (never from global
+    // preferences.provider, which would cause all empty/unhydrated workspaces to switch icons whenever
+    // the user changes provider in any new session form).
+    if (rootAgents.length === 0 && layoutAgentAndDraftInfo.draftProvider) {
+      const fallbackProvider = layoutAgentAndDraftInfo.draftProvider;
       const providerPref = preferences?.providerPreferences?.[fallbackProvider];
-      const fallbackModelFull =
-        layoutAgentAndDraftInfo.draftModel ?? providerPref?.model ?? null;
-      const fallbackModeId =
-        layoutAgentAndDraftInfo.draftModeId ?? providerPref?.mode ?? null;
+      const fallbackModelFull = layoutAgentAndDraftInfo.draftModel ?? providerPref?.model ?? null;
+      const fallbackModeId = layoutAgentAndDraftInfo.draftModeId ?? providerPref?.mode ?? null;
 
       rootAgents.push({
         id: `default-${resolvedWorkspaceKey}`,
@@ -684,8 +697,7 @@ export const WorkspaceAgentMetaRow = memo(function WorkspaceAgentMetaRow({
     (state) => state.toggleWorkspaceSubagents,
   );
 
-  const hasActiveSubagent =
-    summary.runningSubagentCount > 0 || summary.needsInputSubagentCount > 0;
+  const hasActiveSubagent = summary.runningSubagentCount > 0 || summary.needsInputSubagentCount > 0;
   const isCollapsed = explicitCollapsed ?? !hasActiveSubagent;
 
   const handleToggleSubagentsPressIn = useCallback((event: GestureResponderEvent) => {
@@ -728,14 +740,7 @@ export const WorkspaceAgentMetaRow = memo(function WorkspaceAgentMetaRow({
         }
       }
     },
-    [
-      isCollapsed,
-      serverId,
-      summary.subagents,
-      toggleWorkspaceSubagents,
-      workspaceId,
-      workspaceKey,
-    ],
+    [isCollapsed, serverId, summary.subagents, toggleWorkspaceSubagents, workspaceId, workspaceKey],
   );
 
   const subagentSummaryText = useMemo(() => {
@@ -758,10 +763,6 @@ export const WorkspaceAgentMetaRow = memo(function WorkspaceAgentMetaRow({
     summary.runningSubagentCount,
     summary.subagents.length,
   ]);
-
-  if (!summary.primaryAgent && summary.subagents.length === 0) {
-    return null;
-  }
 
   const primary = summary.primaryAgent;
   const tone = primary ? getProviderAccentTone(primary.provider) : getProviderAccentTone("default");
@@ -798,6 +799,22 @@ export const WorkspaceAgentMetaRow = memo(function WorkspaceAgentMetaRow({
       border: "rgba(244, 63, 94, 0.35)",
       bg: "rgba(244, 63, 94, 0.1)",
     };
+  }
+
+  const handleSubagentPillStyle = useCallback(
+    ({ hovered }: { hovered?: boolean }) => [
+      styles.subagentTogglePill,
+      {
+        backgroundColor: subagentPillTone.bg,
+        borderColor: subagentPillTone.border,
+      },
+      hovered && styles.subagentTogglePillHovered,
+    ],
+    [subagentPillTone.bg, subagentPillTone.border],
+  );
+
+  if (!summary.primaryAgent && summary.subagents.length === 0) {
+    return null;
   }
 
   return (
@@ -854,14 +871,7 @@ export const WorkspaceAgentMetaRow = memo(function WorkspaceAgentMetaRow({
             onMouseDown: (e: { stopPropagation?: () => void }) => e.stopPropagation?.(),
           } as object)}
           hitSlop={4}
-          style={({ hovered }) => [
-            styles.subagentTogglePill,
-            {
-              backgroundColor: subagentPillTone.bg,
-              borderColor: subagentPillTone.border,
-            },
-            hovered && styles.subagentTogglePillHovered,
-          ]}
+          style={handleSubagentPillStyle}
           testID={`workspace-subagent-pill-${workspaceKey}`}
         >
           {subagentRunning ? (
@@ -910,8 +920,7 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
   const explicitCollapsed = useSidebarSubagentTreeStore(
     (state) => state.collapsedByWorkspaceKey[resolvedWorkspaceKey],
   );
-  const hasActiveSubagent =
-    summary.runningSubagentCount > 0 || summary.needsInputSubagentCount > 0;
+  const hasActiveSubagent = summary.runningSubagentCount > 0 || summary.needsInputSubagentCount > 0;
   const isCollapsed = explicitCollapsed ?? !hasActiveSubagent;
   const getProviderIcon = useProviderIcons(workspace.serverId);
 
@@ -956,9 +965,7 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
     >
       {summary.subagents.map((row) => {
         const rowTargetKey =
-          row.kind === "paseo"
-            ? `paseo:${row.id}`
-            : `provider:${row.parentAgentId}:${row.id}`;
+          row.kind === "paseo" ? `paseo:${row.id}` : `provider:${row.parentAgentId}:${row.id}`;
         return (
           <SidebarSubagentTreeItem
             key={`${row.kind}_${row.id}`}
@@ -987,7 +994,6 @@ const SidebarSubagentTreeItem = memo(function SidebarSubagentTreeItem({
   isSelected: boolean;
   getProviderIcon: ReturnType<typeof useProviderIcons>;
 }) {
-  const { theme } = useUnistyles();
   const [isHovered, setIsHovered] = useState(false);
 
   const presentation = useMemo(() => buildSubagentRowPresentationData(row), [row]);
@@ -1030,6 +1036,23 @@ const SidebarSubagentTreeItem = memo(function SidebarSubagentTreeItem({
     }
   }, [presentation.statusBucket]);
 
+  const statusIndicator = useMemo(() => {
+    if (presentation.statusBucket === "running") {
+      return (
+        <View style={styles.miniSpinnerWrap}>
+          <StatusRing />
+        </View>
+      );
+    }
+    if (presentation.statusBucket === "needs_input") {
+      return <AlertCircle size={10} color="#f59e0b" />;
+    }
+    if (presentation.statusBucket === "failed") {
+      return <AlertCircle size={10} color="#f43f5e" />;
+    }
+    return <CheckCircle2 size={9.5} color="#64748b" />;
+  }, [presentation.statusBucket]);
+
   const handlePress = useCallback(
     (event: GestureResponderEvent) => {
       event.stopPropagation();
@@ -1069,6 +1092,14 @@ const SidebarSubagentTreeItem = memo(function SidebarSubagentTreeItem({
     event.stopPropagation();
   }, []);
 
+  const handleHoverIn = useCallback(() => {
+    setIsHovered(true);
+  }, []);
+
+  const handleHoverOut = useCallback(() => {
+    setIsHovered(false);
+  }, []);
+
   return (
     <Pressable
       accessibilityRole="button"
@@ -1080,8 +1111,8 @@ const SidebarSubagentTreeItem = memo(function SidebarSubagentTreeItem({
         onPointerDown: (e: { stopPropagation?: () => void }) => e.stopPropagation?.(),
         onMouseDown: (e: { stopPropagation?: () => void }) => e.stopPropagation?.(),
       } as object)}
-      onHoverIn={() => setIsHovered(true)}
-      onHoverOut={() => setIsHovered(false)}
+      onHoverIn={handleHoverIn}
+      onHoverOut={handleHoverOut}
       style={[
         styles.treeItemRow,
         isHovered && styles.treeItemRowHovered,
@@ -1093,19 +1124,7 @@ const SidebarSubagentTreeItem = memo(function SidebarSubagentTreeItem({
       <View style={styles.treeBranchTick} />
 
       {/* Live status indicator */}
-      <View style={styles.subagentStatusSlot}>
-        {presentation.statusBucket === "running" ? (
-          <View style={styles.miniSpinnerWrap}>
-            <StatusRing />
-          </View>
-        ) : presentation.statusBucket === "needs_input" ? (
-          <AlertCircle size={10} color="#f59e0b" />
-        ) : presentation.statusBucket === "failed" ? (
-          <AlertCircle size={10} color="#f43f5e" />
-        ) : (
-          <CheckCircle2 size={9.5} color={theme.colors.foregroundMuted} />
-        )}
-      </View>
+      <View style={styles.subagentStatusSlot}>{statusIndicator}</View>
 
       {/* Subagent role pill (only shows provider icon if different from parent workspace agent) */}
       <View
@@ -1345,4 +1364,3 @@ const styles = StyleSheet.create((theme) => ({
     fontWeight: "600",
   },
 }));
-
