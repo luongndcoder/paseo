@@ -75,7 +75,8 @@ async function harness(env: Record<string, string> = {}) {
           (event.type === "request.completed" ||
             event.type === "request.failed" ||
             event.type === "session.ready" ||
-            event.type === "catalog"),
+            event.type === "catalog" ||
+            event.type === "sessions"),
       );
   }
   async function open(restored?: ProviderPersistence, sessionId = "s") {
@@ -162,6 +163,7 @@ it("streams complete text snapshots, prefixes the system prompt only once and pr
     "prompt.message",
     "prompt.image",
     "session.configure",
+    "session.list",
     "session.persistence",
   ]);
   await h.open();
@@ -772,6 +774,106 @@ describe("image prompts", () => {
     });
     expect((await h.records()).filter((entry) => entry.input)).toHaveLength(0);
   });
+});
+
+it("lists Antigravity sessions filtered by cwd and replays transcript history on import", async () => {
+  const cliHome = await mkdtemp(path.join(os.tmpdir(), "antigravity-cli-home-"));
+  temporary.push(cliHome);
+  const h = await harness({ ANTIGRAVITY_CLI_HOME: cliHome });
+  const convId = "e5cf1e2d-c715-4328-8e67-4a85c8dc3cda";
+
+  await writeFile(
+    path.join(cliHome, "history.jsonl"),
+    [
+      JSON.stringify({
+        display: "Fix Antigravity session import",
+        timestamp: 1792039236674,
+        workspace: h.cwd,
+        conversationId: convId,
+      }),
+      JSON.stringify({
+        display: "Other project prompt",
+        timestamp: 1792039230000,
+        workspace: "/tmp/unrelated-project",
+        conversationId: "11111111-2222-3333-4444-555555555555",
+      }),
+    ].join("\n") + "\n",
+  );
+
+  const logsDir = path.join(cliHome, "brain", convId, ".system_generated", "logs");
+  const { mkdir } = await import("node:fs/promises");
+  await mkdir(logsDir, { recursive: true });
+  await writeFile(
+    path.join(logsDir, "transcript.jsonl"),
+    [
+      JSON.stringify({
+        step_index: 0,
+        type: "USER_INPUT",
+        created_at: "2026-10-15T05:00:00Z",
+        content: "<USER_REQUEST>\nFix Antigravity session import\n</USER_REQUEST>",
+      }),
+      JSON.stringify({
+        step_index: 1,
+        type: "PLANNER_RESPONSE",
+        created_at: "2026-10-15T05:00:05Z",
+        thinking: "Checking provider capabilities",
+        content: "Added session.list capability and transcript replay.",
+      }),
+    ].join("\n") + "\n",
+  );
+
+  await h.request({
+    type: "sessions",
+    requestId: "list-sessions",
+    cwd: h.cwd,
+    limit: 20,
+  });
+
+  const listed = h.events.find(
+    (event) => event.type === "sessions" && event.requestId === "list-sessions",
+  );
+  expect(listed).toMatchObject({
+    type: "sessions",
+    requestId: "list-sessions",
+    sessions: [
+      {
+        persistence: { version: 1, data: { conversationId: convId } },
+        cwd: h.cwd.replace(/\/+$/, ""),
+        title: "Fix Antigravity session import",
+      },
+    ],
+  });
+
+  await h.open({ version: 1, data: { conversationId: convId } }, "imported");
+  const replayed = h.events.filter(
+    (event) => event.type === "timeline.item" && event.sessionId === "imported",
+  );
+  expect(replayed).toEqual([
+    expect.objectContaining({
+      type: "timeline.item",
+      sessionId: "imported",
+      item: expect.objectContaining({
+        type: "user_message",
+        text: "Fix Antigravity session import",
+      }),
+    }),
+    expect.objectContaining({
+      type: "timeline.item",
+      sessionId: "imported",
+      item: expect.objectContaining({
+        type: "reasoning",
+        text: "Checking provider capabilities",
+      }),
+    }),
+    expect.objectContaining({
+      type: "timeline.item",
+      sessionId: "imported",
+      item: expect.objectContaining({
+        type: "assistant_message",
+        text: "Added session.list capability and transcript replay.",
+      }),
+    }),
+  ]);
 });
 
 it.runIf(process.platform === "win32")(

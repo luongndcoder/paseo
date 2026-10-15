@@ -14,6 +14,7 @@ import type {
 import { startDriver, selection, type Driver } from "./process.js";
 import { validateSelection } from "./catalog.js";
 import { PromptFiles } from "./prompt.js";
+import { readTranscriptTimeline } from "./sessions.js";
 import { toolItem } from "./timeline.js";
 import { AntigravityError, diagnostic, type Frame, type Step } from "./wire.js";
 
@@ -40,6 +41,7 @@ interface SessionOptions {
   launch: ProviderLaunch;
   catalog(): ProviderCatalog;
   persistence?: ProviderPersistence;
+  history?: "replay" | "skip";
   emit(event: ProviderEvent): void;
 }
 
@@ -75,6 +77,17 @@ export class Session {
     this.publishFullAccessNotice();
     this.publishConfig();
     this.emit({ type: "session.commands", sessionId: this.options.id, commands: [] });
+    if (this.options.history === "replay" && this.conversationId !== null) {
+      const replayed = await readTranscriptTimeline(this.options.launch, this.conversationId);
+      for (const entry of replayed) {
+        this.emit({
+          type: "timeline.item",
+          sessionId: this.options.id,
+          item: entry.item,
+          timestamp: entry.timestamp,
+        });
+      }
+    }
     this.emit({ type: "session.ready", requestId, sessionId: this.options.id });
   }
 
