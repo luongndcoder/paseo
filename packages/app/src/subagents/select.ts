@@ -77,6 +77,14 @@ export function selectSubagentsForParent(
     return EMPTY_SUBAGENT_ROWS;
   }
 
+  if (pendingArchiveIds.has(params.parentAgentId)) {
+    return EMPTY_SUBAGENT_ROWS;
+  }
+  const parentAgent = agents.get(params.parentAgentId);
+  if (parentAgent?.archivedAt) {
+    return EMPTY_SUBAGENT_ROWS;
+  }
+
   const rows: SubagentRow[] = [];
   for (const agent of agents.values()) {
     if (

@@ -57,12 +57,19 @@ export class AgentStoreProjection {
 
   accept(agent: Agent): Agent {
     let accepted = agent;
-    useSessionStore.getState().setAgents(this.serverId, (current) => {
+    const store = useSessionStore.getState();
+    store.setAgents(this.serverId, (current) => {
       const previous = current.get(agent.id);
       accepted = acceptAgentDirectoryUpdate(previous, mergeSnapshotTurn(previous, agent));
       if (accepted === previous) return current;
       const next = new Map(current);
       next.set(agent.id, accepted);
+      return next;
+    });
+    store.setAgentDetails(this.serverId, (previous) => {
+      if (!previous.has(agent.id)) return previous;
+      const next = new Map(previous);
+      next.delete(agent.id);
       return next;
     });
     return accepted;
@@ -192,7 +199,8 @@ export class AgentStoreProjection {
 
   archive(agentId: string, archivedAt: string): Agent | null {
     let archived: Agent | null = null;
-    useSessionStore.getState().setAgents(this.serverId, (current) => {
+    const store = useSessionStore.getState();
+    store.setAgents(this.serverId, (current) => {
       const agent = current.get(agentId);
       if (!agent) return current;
       archived = {
@@ -202,6 +210,17 @@ export class AgentStoreProjection {
       };
       const next = new Map(current);
       next.set(agentId, archived);
+      return next;
+    });
+    store.setAgentDetails(this.serverId, (current) => {
+      const agent = current.get(agentId);
+      if (!agent) return current;
+      const next = new Map(current);
+      next.set(agentId, {
+        ...agent,
+        turn: { phase: "idle", cancellationRequestId: null },
+        archivedAt: new Date(archivedAt),
+      });
       return next;
     });
     return archived;

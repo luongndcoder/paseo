@@ -91,26 +91,37 @@ export async function fetchAgentHistoryPage(input: {
   });
   return {
     isSearchTruncated: payload.searchTruncated === true,
-    agents: Array.from(agents.values(), (agent) => ({
-      id: agent.id,
-      serverId: input.serverId,
-      serverLabel: input.serverId,
-      title: agent.title ?? null,
-      status: agent.status,
-      turn: agent.turn,
-      lastActivityAt: agent.lastActivityAt,
-      cwd: agent.cwd,
-      workspaceId: agent.workspaceId,
-      provider: agent.provider,
-      pendingPermissionCount: agent.pendingPermissions.length,
-      requiresAttention: agent.requiresAttention,
-      attentionReason: agent.attentionReason,
-      attentionTimestamp: agent.attentionTimestamp ?? null,
-      archivedAt: agent.archivedAt ?? null,
-      createdAt: agent.createdAt,
-      labels: agent.labels,
-      projectPlacement: agent.projectPlacement,
-    })),
+    agents: Array.from(agents.values())
+      .filter(
+        (agent) =>
+          !(
+            agent.archivedAt &&
+            (Boolean(agent.parentAgentId) ||
+              Boolean(agent.labels?.["paseo.parent-agent-id"]) ||
+              agent.provider.endsWith("-worker") ||
+              agent.provider.startsWith("slp-"))
+          ),
+      )
+      .map((agent) => ({
+        id: agent.id,
+        serverId: input.serverId,
+        serverLabel: input.serverId,
+        title: agent.title ?? null,
+        status: agent.status,
+        turn: agent.turn,
+        lastActivityAt: agent.lastActivityAt,
+        cwd: agent.cwd,
+        workspaceId: agent.workspaceId,
+        provider: agent.provider,
+        pendingPermissionCount: agent.pendingPermissions.length,
+        requiresAttention: agent.requiresAttention,
+        attentionReason: agent.attentionReason,
+        attentionTimestamp: agent.attentionTimestamp ?? null,
+        archivedAt: agent.archivedAt ?? null,
+        createdAt: agent.createdAt,
+        labels: agent.labels,
+        projectPlacement: agent.projectPlacement,
+      })),
     pageInfo: payload.pageInfo,
   };
 }

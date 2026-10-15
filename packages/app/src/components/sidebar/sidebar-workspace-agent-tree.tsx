@@ -347,11 +347,11 @@ export function useWorkspaceAgentSidebarSummary(
 
         const considerAgent = (agent: Agent) => {
           if (seenIds.has(agent.id)) return;
+          seenIds.add(agent.id);
           if (agent.archivedAt || pendingArchiveIds.has(agent.id)) return;
           const agentWorkspaceId = normalizeWorkspaceOpaqueId(agent.workspaceId);
           if (agentWorkspaceId) {
             if (Boolean(normalizedWorkspaceId) && agentWorkspaceId === normalizedWorkspaceId) {
-              seenIds.add(agent.id);
               matching.push(agent);
             }
             return;
@@ -363,7 +363,6 @@ export function useWorkspaceAgentSidebarSummary(
           const matchesLayoutTab = layoutAgentIdSet.has(agent.id);
 
           if (matchesLegacyDirectory || matchesLayoutTab) {
-            seenIds.add(agent.id);
             matching.push(agent);
           }
         };
@@ -439,7 +438,15 @@ export function useWorkspaceAgentSidebarSummary(
         }
         // Also include any non-root agent in this workspace whose parent might live elsewhere
         const rootIdSet = new Set(rootAgentIds);
+        const sessionAgents = state.sessions[serverId]?.agents;
         for (const agent of rawWorkspaceAgents) {
+          if (agent.archivedAt || pendingArchiveIds.has(agent.id)) continue;
+          if (agent.parentAgentId) {
+            const parentAgent = sessionAgents?.get(agent.parentAgentId);
+            if (parentAgent?.archivedAt || pendingArchiveIds.has(agent.parentAgentId)) {
+              continue;
+            }
+          }
           if (!rootIdSet.has(agent.id) && !seenIds.has(agent.id)) {
             seenIds.add(agent.id);
             collected.push({
@@ -948,7 +955,7 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
     ),
   );
 
-  if (summary.subagents.length === 0 || isCollapsed) {
+  if (workspace.archivingAt !== null || summary.subagents.length === 0 || isCollapsed) {
     return null;
   }
 

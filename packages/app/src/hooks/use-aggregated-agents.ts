@@ -79,6 +79,15 @@ export function useAggregatedAgents(options?: {
         if (!includeArchived && agent.archivedAt) {
           continue;
         }
+        if (
+          agent.archivedAt &&
+          (Boolean(agent.parentAgentId) ||
+            Boolean(agent.labels?.["paseo.parent-agent-id"]) ||
+            agent.provider.endsWith("-worker") ||
+            agent.provider.startsWith("slp-"))
+        ) {
+          continue;
+        }
         const nextAgent: AggregatedAgent = {
           id: agent.id,
           serverId,

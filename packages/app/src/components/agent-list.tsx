@@ -415,6 +415,14 @@ export function AgentList({
   const flatItems = useMemo((): FlatListItem[] => {
     const buckets = new Map<DateSectionKey, AggregatedAgent[]>();
     for (const agent of agents) {
+      if (
+        agent.archivedAt &&
+        (Boolean(agent.labels?.["paseo.parent-agent-id"]) ||
+          agent.provider.endsWith("-worker") ||
+          agent.provider.startsWith("slp-"))
+      ) {
+        continue;
+      }
       const section = deriveDateSectionKey(agent.lastActivityAt);
       const existing = buckets.get(section) ?? [];
       existing.push(agent);

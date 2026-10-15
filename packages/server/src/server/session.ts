@@ -5472,6 +5472,17 @@ export class Session {
         (request.type === "fetch_agents_request" && request.includeBackground),
       includeUnavailablePersisted: request.type === "fetch_agent_history_request",
     });
+    if (request.type === "fetch_agent_history_request" && !filter?.labels) {
+      agents = agents.filter(
+        (agent) =>
+          !(
+            agent.archivedAt &&
+            (Boolean(getParentAgentIdFromLabels(agent.labels)) ||
+              agent.provider.endsWith("-worker") ||
+              agent.provider.startsWith("slp-"))
+          ),
+      );
+    }
     const activePlacementsByWorkspaceId =
       scope === "active" ? await this.buildActiveProjectPlacementsByWorkspaceId() : null;
     if (activePlacementsByWorkspaceId) {
