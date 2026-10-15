@@ -58,13 +58,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import Svg, { Circle, Line, Path } from "react-native-svg";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
+import { StyleSheet } from "react-native-unistyles";
 
 import { isWeb } from "@/constants/platform";
 import { useToast } from "@/contexts/toast-context";
 import { invalidateCheckoutGitQueriesForClient } from "@/git/query-keys";
 import type { ParsedDiffFile } from "@/git/use-diff-query";
 import { useHostRuntimeClient } from "@/runtime/host-runtime";
+import { confirmDialog, type ConfirmDialogInput } from "@/utils/confirm-dialog";
 
 import {
   type CommitGraphRowLayout,
@@ -136,15 +137,7 @@ function CommitRowGraphSvg({ row }: { row: CommitGraphRowLayout }) {
               );
             }
             const d = `M ${x1} 0 C ${x1} ${centerY * 0.65}, ${x2} ${centerY * 0.35}, ${x2} ${centerY}`;
-            return (
-              <Path
-                key={`seg-${idx}`}
-                d={d}
-                stroke={stroke}
-                strokeWidth={1.75}
-                fill="none"
-              />
-            );
+            return <Path key={`seg-${idx}`} d={d} stroke={stroke} strokeWidth={1.75} fill="none" />;
           }
 
           if (x1 === x2) {
@@ -162,15 +155,7 @@ function CommitRowGraphSvg({ row }: { row: CommitGraphRowLayout }) {
           }
           const midY = centerY + (ROW_HEIGHT - centerY) * 0.55;
           const d = `M ${x1} ${centerY} C ${x1} ${midY}, ${x2} ${centerY + 3}, ${x2} ${ROW_HEIGHT}`;
-          return (
-            <Path
-              key={`seg-${idx}`}
-              d={d}
-              stroke={stroke}
-              strokeWidth={1.75}
-              fill="none"
-            />
-          );
+          return <Path key={`seg-${idx}`} d={d} stroke={stroke} strokeWidth={1.75} fill="none" />;
         })}
 
         <Circle
@@ -289,9 +274,7 @@ interface ChangedFileDirectoryGroup {
   files: CheckoutCommitFile[];
 }
 
-function groupChangedFilesByDirectory(
-  files: CheckoutCommitFile[],
-): ChangedFileDirectoryGroup[] {
+function groupChangedFilesByDirectory(files: CheckoutCommitFile[]): ChangedFileDirectoryGroup[] {
   const map = new Map<string, CheckoutCommitFile[]>();
   for (const file of files) {
     const lastSlash = file.path.lastIndexOf("/");
@@ -319,7 +302,6 @@ export function PyCharmGitModal({
   onOpenCommitTab,
 }: PyCharmGitModalProps) {
   const visible = Boolean(visibleProp ?? open);
-  const { theme } = useUnistyles();
   const client = useHostRuntimeClient(serverId);
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -364,21 +346,18 @@ export function PyCharmGitModal({
   } | null>(null);
   const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const showModalFeedback = useCallback(
-    (kind: "info" | "success" | "error", text: string) => {
-      if (statusTimerRef.current) {
-        clearTimeout(statusTimerRef.current);
-        statusTimerRef.current = null;
-      }
-      setStatusBanner({ kind, text });
-      if (kind !== "info") {
-        statusTimerRef.current = setTimeout(() => {
-          setStatusBanner(null);
-        }, 4500);
-      }
-    },
-    [],
-  );
+  const showModalFeedback = useCallback((kind: "info" | "success" | "error", text: string) => {
+    if (statusTimerRef.current) {
+      clearTimeout(statusTimerRef.current);
+      statusTimerRef.current = null;
+    }
+    setStatusBanner({ kind, text });
+    if (kind !== "info") {
+      statusTimerRef.current = setTimeout(() => {
+        setStatusBanner(null);
+      }, 4500);
+    }
+  }, []);
 
   const [commits, setCommits] = useState<CheckoutCommit[]>([]);
   const [currentBranch, setCurrentBranch] = useState<string | null>(null);
@@ -482,9 +461,7 @@ export function PyCharmGitModal({
 
         if (response.commits.length > 0) {
           setSelectedCommitSha((prev) =>
-            prev && response.commits.some((c) => c.sha === prev)
-              ? prev
-              : response.commits[0].sha,
+            prev && response.commits.some((c) => c.sha === prev) ? prev : response.commits[0].sha,
           );
         } else {
           setSelectedCommitSha(null);
@@ -563,7 +540,10 @@ export function PyCharmGitModal({
   }, [commits, dateFilterPreset]);
 
   const selectedCommit = useMemo(
-    () => visibleCommits.find((c) => c.sha === selectedCommitSha) ?? commits.find((c) => c.sha === selectedCommitSha) ?? null,
+    () =>
+      visibleCommits.find((c) => c.sha === selectedCommitSha) ??
+      commits.find((c) => c.sha === selectedCommitSha) ??
+      null,
     [commits, selectedCommitSha, visibleCommits],
   );
 
@@ -635,14 +615,12 @@ export function PyCharmGitModal({
   useEffect(() => {
     setActiveHunkIndex(0);
     if (selectedStashIndex !== null) {
-      const diff =
-        stashDetail?.diffs.find((d) => d.path === selectedFilePath) ?? null;
+      const diff = stashDetail?.diffs.find((d) => d.path === selectedFilePath) ?? null;
       setSelectedFileDiff(diff as ParsedDiffFile | null);
       return;
     }
     if (selectedCompareRef !== null) {
-      const diff =
-        compareDetail?.diffs.find((d) => d.path === selectedFilePath) ?? null;
+      const diff = compareDetail?.diffs.find((d) => d.path === selectedFilePath) ?? null;
       setSelectedFileDiff(diff as ParsedDiffFile | null);
       return;
     }
@@ -693,54 +671,86 @@ export function PyCharmGitModal({
     }
   }, [selectedCommit, selectedCompareRef, selectedStashIndex]);
 
-  const graphLayout = useMemo(
-    () => computeCommitGraphLayout(visibleCommits),
-    [visibleCommits],
-  );
+  const graphLayout = useMemo(() => computeCommitGraphLayout(visibleCommits), [visibleCommits]);
 
   const executeGitAction = useCallback(
     async (action: CheckoutGitLogAction, skipConfirm = false) => {
       if (!client || !cwd || actionBusy) return;
       if (!skipConfirm) {
-        const shortTarget =
-          action.target.length === 40 ? action.target.slice(0, 7) : action.target;
-        let confirmSpec: {
-          title: string;
-          message: string;
-          confirmLabel: string;
-          destructive?: boolean;
-        } | null = null;
+        const shortTarget = action.target.length === 40 ? action.target.slice(0, 7) : action.target;
+        const headLabel = currentBranch ?? "HEAD";
+        let confirmInput: ConfirmDialogInput | null = null;
         switch (action.kind) {
+          case "merge-ref":
+            confirmInput = {
+              title: `Merge '${shortTarget}' into '${headLabel}'?`,
+              message: `Merge changes from '${shortTarget}' into current branch '${headLabel}'. Any uncommitted local changes will be automatically stashed and restored.`,
+              confirmLabel: "Merge Branch",
+              branchFlow: { from: shortTarget, to: headLabel, actionLabel: "MERGE INTO" },
+              badges: [
+                { label: "Auto-Stash: ON", tone: "emerald" },
+                { label: "3-Way Conflict Resolver", tone: "cyan" },
+              ],
+            };
+            break;
+          case "rebase-onto":
+            confirmInput = {
+              title: `Rebase '${headLabel}' onto '${shortTarget}'?`,
+              message: `Reapply commits from '${headLabel}' on top of '${shortTarget}'. Any uncommitted local changes will be automatically stashed and restored.`,
+              confirmLabel: "Rebase Branch",
+              branchFlow: { from: headLabel, to: shortTarget, actionLabel: "REBASE ONTO" },
+              badges: [
+                { label: "Auto-Stash: ON", tone: "emerald" },
+                { label: "3-Way Conflict Resolver", tone: "cyan" },
+              ],
+            };
+            break;
+          case "cherry-pick":
+            confirmInput = {
+              title: `Cherry-Pick Commit ${shortTarget}?`,
+              message: `Apply commit ${shortTarget} onto current branch '${headLabel}'. Uncommitted local changes will be auto-stashed and restored.`,
+              confirmLabel: "Cherry-Pick",
+              branchFlow: { from: shortTarget, to: headLabel, actionLabel: "CHERRY-PICK" },
+              badges: [{ label: "Auto-Stash: ON", tone: "emerald" }],
+            };
+            break;
+          case "revert":
+            confirmInput = {
+              title: `Revert Commit ${shortTarget}?`,
+              message: `Create a new commit on '${headLabel}' that reverses all changes introduced by commit ${shortTarget}.`,
+              confirmLabel: "Revert Commit",
+              branchFlow: { from: shortTarget, to: headLabel, actionLabel: "REVERT ON" },
+              badges: [{ label: "Auto-Stash: ON", tone: "emerald" }],
+            };
+            break;
           case "drop-commit":
-            confirmSpec = {
+            confirmInput = {
               title: "Drop Commit",
-              message: `Permanently drop commit ${shortTarget} from branch history?`,
+              message: `Permanently drop commit ${shortTarget} from branch '${headLabel}' history?`,
               confirmLabel: "Drop Commit",
               destructive: true,
             };
             break;
           case "reset": {
             const resetMode = action.mode ?? "mixed";
-            if (resetMode === "hard") {
-              confirmSpec = {
-                title: "Reset Current Branch (--hard)",
-                message: `Reset "${currentBranch ?? "HEAD"}" to ${shortTarget} (--hard)? Uncommitted changes will be discarded!`,
-                confirmLabel: "Reset HARD",
-                destructive: true,
-              };
-            }
-            break;
-          }
-          case "rebase-onto":
-            confirmSpec = {
-              title: "Rebase Current Branch",
-              message: `Rebase "${currentBranch ?? "HEAD"}" onto "${shortTarget}"?`,
-              confirmLabel: "Rebase",
-              destructive: true,
+            confirmInput = {
+              title: `Reset Current Branch (--${resetMode})`,
+              message:
+                resetMode === "hard"
+                  ? `Reset "${headLabel}" to ${shortTarget} (--hard)? Uncommitted working tree and staged changes will be permanently discarded!`
+                  : `Move "${headLabel}" HEAD pointer to ${shortTarget} (--${resetMode})? Working tree files will be preserved.`,
+              confirmLabel: `Reset --${resetMode.toUpperCase()}`,
+              destructive: resetMode === "hard",
+              branchFlow: {
+                from: headLabel,
+                to: shortTarget,
+                actionLabel: `RESET --${resetMode.toUpperCase()}`,
+              },
             };
             break;
+          }
           case "delete-branch":
-            confirmSpec = {
+            confirmInput = {
               title: "Delete Branch",
               message: `Delete local branch "${action.target}"?`,
               confirmLabel: "Delete Branch",
@@ -748,7 +758,7 @@ export function PyCharmGitModal({
             };
             break;
           case "delete-tag":
-            confirmSpec = {
+            confirmInput = {
               title: "Delete Tag",
               message: `Delete tag "${action.target}"?`,
               confirmLabel: "Delete Tag",
@@ -756,7 +766,7 @@ export function PyCharmGitModal({
             };
             break;
           case "stash-drop":
-            confirmSpec = {
+            confirmInput = {
               title: "Drop Stash",
               message: `Permanently delete stash@{${action.target}}?`,
               confirmLabel: "Drop Stash",
@@ -765,7 +775,7 @@ export function PyCharmGitModal({
             break;
           case "apply-hunk-patch":
             if (action.patchMode !== "stage") {
-              confirmSpec = {
+              confirmInput = {
                 title: "Rollback Diff Hunk",
                 message: `Discard changes in this hunk from "${action.target}"?`,
                 confirmLabel: "Rollback Hunk",
@@ -774,10 +784,9 @@ export function PyCharmGitModal({
             }
             break;
           case "abort-operation":
-            confirmSpec = {
+            confirmInput = {
               title: "Abort Git Operation",
-              message:
-                "Abort the current Merge / Rebase / Cherry-Pick and restore previous state?",
+              message: "Abort the current Merge / Rebase / Cherry-Pick and restore previous state?",
               confirmLabel: "Abort Operation",
               destructive: true,
             };
@@ -785,13 +794,11 @@ export function PyCharmGitModal({
           default:
             break;
         }
-        if (confirmSpec) {
-          setPromptMode({
-            kind: "confirm-action",
-            ...confirmSpec,
-            action,
-          });
-          return;
+        if (confirmInput) {
+          const ok = await confirmDialog(confirmInput);
+          if (!ok) {
+            return;
+          }
         }
       }
 
@@ -804,8 +811,16 @@ export function PyCharmGitModal({
       );
       try {
         const res = await client.runGitLogAction(cwd, action);
+        if (!res.success) {
+          const errText = res.message ?? `Git ${action.kind} failed`;
+          showModalFeedback("error", errText);
+          toast.error(errText);
+          await fetchGraphData();
+          return;
+        }
         const msg = res.message || `Executed ${action.kind}`;
-        showModalFeedback("success", msg);
+        const hasConflict = msg.startsWith("CONFLICT:");
+        showModalFeedback(hasConflict ? "error" : "success", msg);
         toast.show(msg);
         setPromptMode(null);
         setPromptInputValue("");
@@ -817,6 +832,9 @@ export function PyCharmGitModal({
         }
         await invalidateCheckoutGitQueriesForClient(queryClient, { serverId, cwd });
         await fetchGraphData();
+        if (hasConflict) {
+          setConflictModalOpen(true);
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : `Git ${action.kind} failed`;
         showModalFeedback("error", message);
@@ -965,8 +983,7 @@ export function PyCharmGitModal({
     const q = refTreeFilter.trim().toLowerCase();
     if (!q) return stashes;
     return stashes.filter(
-      (s) =>
-        s.ref.toLowerCase().includes(q) || s.message.toLowerCase().includes(q),
+      (s) => s.ref.toLowerCase().includes(q) || s.message.toLowerCase().includes(q),
     );
   }, [stashes, refTreeFilter]);
 
@@ -1002,10 +1019,7 @@ export function PyCharmGitModal({
 
   const handleFileRowPress = useCallback((path: string) => {
     const now = Date.now();
-    if (
-      lastFileClickRef.current.path === path &&
-      now - lastFileClickRef.current.time < 360
-    ) {
+    if (lastFileClickRef.current.path === path && now - lastFileClickRef.current.time < 360) {
       setSelectedFilePath(path);
       setRepoDiffModalOpen(true);
     } else {
@@ -1035,85 +1049,123 @@ export function PyCharmGitModal({
       ? `Log: HEAD (${currentBranch ?? "detached"})`
       : "Log: All";
 
-  const renderLocalBranchRow = (b: CheckoutGitBranchNode, shortLabel: string, indented: boolean) => {
+  const renderLocalBranchRow = (
+    b: CheckoutGitBranchNode,
+    shortLabel: string,
+    indented: boolean,
+  ) => {
     const isSelected = selectedRef === b.name;
     const isStarred = starredRefs.has(b.name) || b.isCurrent;
     return (
-      <Pressable
-        key={`local-${b.name}`}
-        style={[
-          styles.refTreeItem,
-          indented && styles.refTreeItemIndented,
-          isSelected && styles.refTreeItemSelected,
-        ]}
-        onPress={() => {
-          const now = Date.now();
-          if (
-            lastBranchClickRef.current.name === b.name &&
-            now - lastBranchClickRef.current.time < 360 &&
-            !b.isCurrent
-          ) {
-            lastBranchClickRef.current = { name: "", time: 0 };
-            void executeGitAction({ kind: "checkout-ref", target: b.name });
-            return;
-          }
-          lastBranchClickRef.current = { name: b.name, time: now };
-          setSelectedStashIndex(null);
-          setSelectedCompareRef(null);
-          setSelectedRef(b.name);
-          setAllBranches(false);
-        }}
-        testID={`pycharm-git-branch-local-${b.name}`}
-      >
+      <View key={`local-${b.name}`}>
         <Pressable
-          onPress={(e) => {
-            e.stopPropagation?.();
-            toggleStarRef(b.name);
-          }}
-          hitSlop={4}
-        >
-          <Star
-            size={11}
-            color={isStarred ? "#f59e0b" : "#475569"}
-            fill={isStarred ? "#f59e0b" : "transparent"}
-          />
-        </Pressable>
-        <GitBranch
-          size={12}
-          color={b.isCurrent ? "#10b981" : "#94a3b8"}
-        />
-        <Text
           style={[
-            styles.refTreeItemText,
-            b.isCurrent && styles.refTreeItemCurrentText,
-            isSelected && styles.refTreeItemSelectedText,
+            styles.refTreeItem,
+            indented && styles.refTreeItemIndented,
+            isSelected && styles.refTreeItemSelected,
           ]}
-          numberOfLines={1}
+          onPress={() => {
+            const now = Date.now();
+            if (
+              lastBranchClickRef.current.name === b.name &&
+              now - lastBranchClickRef.current.time < 360 &&
+              !b.isCurrent
+            ) {
+              lastBranchClickRef.current = { name: "", time: 0 };
+              void executeGitAction({ kind: "checkout-ref", target: b.name });
+              return;
+            }
+            lastBranchClickRef.current = { name: b.name, time: now };
+            setSelectedStashIndex(null);
+            setSelectedCompareRef(null);
+            setSelectedRef(b.name);
+            setAllBranches(false);
+          }}
+          testID={`pycharm-git-branch-local-${b.name}`}
         >
-          {shortLabel}
-        </Text>
-        {isSelected && !b.isCurrent ? (
           <Pressable
-            style={styles.inlineBranchCheckoutBtn}
-            disabled={actionBusy}
             onPress={(e) => {
               e.stopPropagation?.();
-              void executeGitAction({ kind: "checkout-ref", target: b.name });
+              toggleStarRef(b.name);
             }}
             hitSlop={4}
-            testID={`pycharm-git-inline-checkout-${b.name}`}
           >
-            <Text style={styles.inlineBranchCheckoutText}>Checkout</Text>
+            <Star
+              size={11}
+              color={isStarred ? "#f59e0b" : "#475569"}
+              fill={isStarred ? "#f59e0b" : "transparent"}
+            />
           </Pressable>
-        ) : null}
-        {b.ahead > 0 || b.behind > 0 ? (
-          <Text style={styles.aheadBehindBadge}>
-            {b.ahead > 0 ? `↑${b.ahead}` : ""}
-            {b.ahead > 0 && b.behind > 0 ? " " : ""}
-            {b.behind > 0 ? `↓${b.behind}` : ""}
+          <GitBranch size={12} color={b.isCurrent ? "#10b981" : "#94a3b8"} />
+          <Text
+            style={[
+              styles.refTreeItemText,
+              b.isCurrent && styles.refTreeItemCurrentText,
+              isSelected && styles.refTreeItemSelectedText,
+            ]}
+            numberOfLines={1}
+          >
+            {shortLabel}
           </Text>
+          {(b.ahead ?? 0) > 0 || (b.behind ?? 0) > 0 ? (
+            <Text style={styles.aheadBehindBadge}>
+              {(b.ahead ?? 0) > 0 ? `↑${b.ahead}` : ""}
+              {(b.ahead ?? 0) > 0 && (b.behind ?? 0) > 0 ? " " : ""}
+              {(b.behind ?? 0) > 0 ? `↓${b.behind}` : ""}
+            </Text>
+          ) : null}
+        </Pressable>
+        {isSelected && !b.isCurrent ? (
+          <View
+            style={styles.inlineBranchActionStrip}
+            testID={`pycharm-git-branch-popup-${b.name}`}
+          >
+            <Pressable
+              style={styles.inlineBranchCheckoutBtn}
+              disabled={actionBusy}
+              onPress={() => void executeGitAction({ kind: "checkout-ref", target: b.name })}
+              testID={`pycharm-git-inline-checkout-${b.name}`}
+            >
+              <Text style={styles.inlineBranchCheckoutText}>Checkout</Text>
+            </Pressable>
+            <Pressable
+              style={styles.inlineBranchMergeBtn}
+              disabled={actionBusy}
+              onPress={() => void executeGitAction({ kind: "merge-ref", target: b.name })}
+              testID={`pycharm-git-inline-merge-${b.name}`}
+            >
+              <Text style={styles.inlineBranchMergeText}>Merge into {currentBranch ?? "HEAD"}</Text>
+            </Pressable>
+            <Pressable
+              style={styles.inlineBranchNeutralBtn}
+              disabled={actionBusy}
+              onPress={() => void executeGitAction({ kind: "rebase-onto", target: b.name })}
+              testID={`pycharm-git-inline-rebase-${b.name}`}
+            >
+              <Text style={styles.inlineBranchNeutralText}>Rebase</Text>
+            </Pressable>
+            <Pressable
+              style={styles.inlineBranchNeutralBtn}
+              disabled={actionBusy}
+              onPress={() => {
+                setSelectedStashIndex(null);
+                setSelectedCompareRef((prev) => (prev === b.name ? null : b.name));
+              }}
+              testID={`pycharm-git-inline-compare-${b.name}`}
+            >
+              <Text style={styles.inlineBranchNeutralText}>Compare</Text>
+            </Pressable>
+            <Pressable
+              style={styles.inlineBranchDangerBtn}
+              disabled={actionBusy}
+              onPress={() => void executeGitAction({ kind: "delete-branch", target: b.name })}
+              testID={`pycharm-git-inline-delete-${b.name}`}
+            >
+              <Text style={styles.inlineBranchDangerText}>Delete</Text>
+            </Pressable>
+          </View>
         ) : null}
-      </Pressable>
+      </View>
     );
   };
 
@@ -1125,49 +1177,93 @@ export function PyCharmGitModal({
     const isSelected = selectedRef === rb.name;
     const isStarred = starredRefs.has(rb.name);
     return (
-      <Pressable
-        key={`remote-${rb.name}`}
-        style={[
-          styles.refTreeItem,
-          indented && styles.refTreeItemIndented,
-          isSelected && styles.refTreeItemSelected,
-        ]}
-        onPress={() => {
-          setSelectedStashIndex(null);
-          setSelectedCompareRef(null);
-          setSelectedRef(rb.name);
-          setAllBranches(false);
-        }}
-        testID={`pycharm-git-branch-remote-${rb.name}`}
-      >
+      <View key={`remote-${rb.name}`}>
         <Pressable
-          onPress={(e) => {
-            e.stopPropagation?.();
-            toggleStarRef(rb.name);
-          }}
-          hitSlop={4}
-        >
-          <Star
-            size={11}
-            color={isStarred ? "#f59e0b" : "#475569"}
-            fill={isStarred ? "#f59e0b" : "transparent"}
-          />
-        </Pressable>
-        <GitFork size={12} color="#06b6d4" />
-        <Text
           style={[
-            styles.refTreeItemText,
-            isSelected && styles.refTreeItemSelectedText,
+            styles.refTreeItem,
+            indented && styles.refTreeItemIndented,
+            isSelected && styles.refTreeItemSelected,
           ]}
-          numberOfLines={1}
+          onPress={() => {
+            setSelectedStashIndex(null);
+            setSelectedCompareRef(null);
+            setSelectedRef(rb.name);
+            setAllBranches(false);
+          }}
+          testID={`pycharm-git-branch-remote-${rb.name}`}
         >
-          {shortLabel}
-        </Text>
-      </Pressable>
+          <Pressable
+            onPress={(e) => {
+              e.stopPropagation?.();
+              toggleStarRef(rb.name);
+            }}
+            hitSlop={4}
+          >
+            <Star
+              size={11}
+              color={isStarred ? "#f59e0b" : "#475569"}
+              fill={isStarred ? "#f59e0b" : "transparent"}
+            />
+          </Pressable>
+          <GitFork size={12} color="#06b6d4" />
+          <Text
+            style={[styles.refTreeItemText, isSelected && styles.refTreeItemSelectedText]}
+            numberOfLines={1}
+          >
+            {shortLabel}
+          </Text>
+        </Pressable>
+        {isSelected ? (
+          <View
+            style={styles.inlineBranchActionStrip}
+            testID={`pycharm-git-branch-popup-${rb.name}`}
+          >
+            <Pressable
+              style={styles.inlineBranchCheckoutBtn}
+              disabled={actionBusy}
+              onPress={() => void executeGitAction({ kind: "checkout-ref", target: rb.name })}
+              testID={`pycharm-git-inline-checkout-${rb.name}`}
+            >
+              <Text style={styles.inlineBranchCheckoutText}>Checkout</Text>
+            </Pressable>
+            <Pressable
+              style={styles.inlineBranchMergeBtn}
+              disabled={actionBusy}
+              onPress={() => void executeGitAction({ kind: "merge-ref", target: rb.name })}
+              testID={`pycharm-git-inline-merge-${rb.name}`}
+            >
+              <Text style={styles.inlineBranchMergeText}>Merge into {currentBranch ?? "HEAD"}</Text>
+            </Pressable>
+            <Pressable
+              style={styles.inlineBranchNeutralBtn}
+              disabled={actionBusy}
+              onPress={() => void executeGitAction({ kind: "rebase-onto", target: rb.name })}
+              testID={`pycharm-git-inline-rebase-${rb.name}`}
+            >
+              <Text style={styles.inlineBranchNeutralText}>Rebase</Text>
+            </Pressable>
+            <Pressable
+              style={styles.inlineBranchNeutralBtn}
+              disabled={actionBusy}
+              onPress={() => {
+                setSelectedStashIndex(null);
+                setSelectedCompareRef((prev) => (prev === rb.name ? null : rb.name));
+              }}
+              testID={`pycharm-git-inline-compare-${rb.name}`}
+            >
+              <Text style={styles.inlineBranchNeutralText}>Compare</Text>
+            </Pressable>
+          </View>
+        ) : null}
+      </View>
     );
   };
 
-  const renderChangedFileRow = (f: CheckoutCommitFile, showDirSuffix: boolean, indented: boolean) => {
+  const renderChangedFileRow = (
+    f: CheckoutCommitFile,
+    showDirSuffix: boolean,
+    indented: boolean,
+  ) => {
     const isFileSelected = f.path === selectedFilePath;
     const lastSlash = f.path.lastIndexOf("/");
     const fileName = lastSlash === -1 ? f.path : f.path.slice(lastSlash + 1);
@@ -1192,10 +1288,7 @@ export function PyCharmGitModal({
         onPress={() => handleFileRowPress(f.path)}
       >
         <FileCode2 size={13} color={statusColor} />
-        <Text
-          style={[styles.fileTreeLeafName, { color: statusColor }]}
-          numberOfLines={1}
-        >
+        <Text style={[styles.fileTreeLeafName, { color: statusColor }]} numberOfLines={1}>
           {fileName}
         </Text>
         {showDirSuffix && dirName ? (
@@ -1204,12 +1297,8 @@ export function PyCharmGitModal({
           </Text>
         ) : null}
         <View style={styles.commitFileStats}>
-          {f.additions > 0 ? (
-            <Text style={styles.statAdd}>+{f.additions}</Text>
-          ) : null}
-          {f.deletions > 0 ? (
-            <Text style={styles.statDel}>-{f.deletions}</Text>
-          ) : null}
+          {f.additions > 0 ? <Text style={styles.statAdd}>+{f.additions}</Text> : null}
+          {f.deletions > 0 ? <Text style={styles.statDel}>-{f.deletions}</Text> : null}
           <Pressable
             style={styles.fileRowQuickDiffBtn}
             onPress={(e) => {
@@ -1228,14 +1317,13 @@ export function PyCharmGitModal({
   };
 
   const hunkCount = selectedFileDiff?.hunks?.length ?? 0;
-  const parentShortSha =
-    selectedCommit?.parents?.[0]?.slice(0, 8) ?? "base";
+  const parentShortSha = selectedCommit?.parents?.[0]?.slice(0, 8) ?? "base";
   const commitShortSha =
     selectedStashIndex !== null
       ? `stash@{${selectedStashIndex}}`
       : selectedCompareRef !== null
         ? "HEAD"
-        : selectedCommit?.shortSha ?? "HEAD";
+        : (selectedCommit?.shortSha ?? "HEAD");
   const leftLabel =
     selectedCompareRef !== null
       ? `${selectedCompareRef} ${selectedFilePath ?? ""}`
@@ -1270,32 +1358,52 @@ export function PyCharmGitModal({
 
               {currentBranch ? (
                 <View style={styles.currentBranchPill}>
-                  <Text style={styles.currentBranchPillText}>
-                    HEAD → {currentBranch}
-                  </Text>
+                  <Text style={styles.currentBranchPillText}>HEAD → {currentBranch}</Text>
                 </View>
               ) : null}
 
-              {selectedLocalBranchObj && !selectedLocalBranchObj.isCurrent ? (
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.headerSwitchBranchBtn,
-                    pressed && styles.btnPressed,
-                  ]}
-                  disabled={actionBusy}
-                  onPress={() =>
-                    void executeGitAction({
-                      kind: "checkout-ref",
-                      target: selectedLocalBranchObj.name,
-                    })
-                  }
-                  testID="pycharm-git-header-checkout-selected-btn"
-                >
-                  <GitBranch size={11} color="#06b6d4" />
-                  <Text style={styles.headerSwitchBranchBtnText}>
-                    Checkout {selectedLocalBranchObj.name}
-                  </Text>
-                </Pressable>
+              {(selectedLocalBranchObj && !selectedLocalBranchObj.isCurrent) ||
+              selectedRemoteBranchObj ? (
+                <>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.headerSwitchBranchBtn,
+                      pressed && styles.btnPressed,
+                    ]}
+                    disabled={actionBusy}
+                    onPress={() =>
+                      void executeGitAction({
+                        kind: "checkout-ref",
+                        target: (selectedLocalBranchObj ?? selectedRemoteBranchObj)!.name,
+                      })
+                    }
+                    testID="pycharm-git-header-checkout-selected-btn"
+                  >
+                    <GitBranch size={11} color="#10b981" />
+                    <Text style={styles.headerSwitchBranchBtnText}>
+                      Checkout {(selectedLocalBranchObj ?? selectedRemoteBranchObj)!.name}
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.headerMergeBranchBtn,
+                      pressed && styles.btnPressed,
+                    ]}
+                    disabled={actionBusy}
+                    onPress={() =>
+                      void executeGitAction({
+                        kind: "merge-ref",
+                        target: (selectedLocalBranchObj ?? selectedRemoteBranchObj)!.name,
+                      })
+                    }
+                    testID="pycharm-git-header-merge-selected-btn"
+                  >
+                    <GitMerge size={11} color="#06b6d4" />
+                    <Text style={styles.headerMergeBranchBtnText}>
+                      Merge into {currentBranch ?? "HEAD"}
+                    </Text>
+                  </Pressable>
+                </>
               ) : null}
             </View>
 
@@ -1413,10 +1521,7 @@ export function PyCharmGitModal({
             <View style={styles.topPromptBar} testID="pycharm-git-top-prompt-bar">
               {promptMode.kind === "confirm-action" ? (
                 <View style={styles.topPromptRow}>
-                  <AlertTriangle
-                    size={13}
-                    color={promptMode.destructive ? "#f43f5e" : "#f59e0b"}
-                  />
+                  <AlertTriangle size={13} color={promptMode.destructive ? "#f43f5e" : "#f59e0b"} />
                   <Text style={styles.topPromptTitle}>{promptMode.title}:</Text>
                   <Text style={styles.topPromptMessage} numberOfLines={1}>
                     {promptMode.message}
@@ -1429,10 +1534,7 @@ export function PyCharmGitModal({
                     disabled={actionBusy}
                     onPress={() => void executeGitAction(promptMode.action, true)}
                   >
-                    <Check
-                      size={12}
-                      color={promptMode.destructive ? "#ffffff" : "#0f172a"}
-                    />
+                    <Check size={12} color={promptMode.destructive ? "#ffffff" : "#0f172a"} />
                     <Text
                       style={[
                         styles.promptConfirmText,
@@ -1442,10 +1544,7 @@ export function PyCharmGitModal({
                       {promptMode.confirmLabel}
                     </Text>
                   </Pressable>
-                  <Pressable
-                    style={styles.promptCancelBtn}
-                    onPress={() => setPromptMode(null)}
-                  >
+                  <Pressable style={styles.promptCancelBtn} onPress={() => setPromptMode(null)}>
                     <Text style={styles.promptCancelText}>Cancel</Text>
                   </Pressable>
                 </View>
@@ -1471,15 +1570,10 @@ export function PyCharmGitModal({
                           })
                         }
                       >
-                        <Text style={styles.resetModeChoiceText}>
-                          {mode.toUpperCase()}
-                        </Text>
+                        <Text style={styles.resetModeChoiceText}>{mode.toUpperCase()}</Text>
                       </Pressable>
                     ))}
-                    <Pressable
-                      style={styles.promptCancelBtn}
-                      onPress={() => setPromptMode(null)}
-                    >
+                    <Pressable style={styles.promptCancelBtn} onPress={() => setPromptMode(null)}>
                       <Text style={styles.promptCancelText}>Cancel</Text>
                     </Pressable>
                   </View>
@@ -1504,8 +1598,7 @@ export function PyCharmGitModal({
                     onChangeText={setPromptInputValue}
                     autoFocus
                     placeholder={
-                      promptMode.kind === "new-branch" ||
-                      promptMode.kind === "stash-branch"
+                      promptMode.kind === "new-branch" || promptMode.kind === "stash-branch"
                         ? "feature/my-branch"
                         : promptMode.kind === "new-tag"
                           ? "v1.0.0"
@@ -1574,10 +1667,7 @@ export function PyCharmGitModal({
                       {promptMode.kind === "new-stash" ? "Stash Now" : "Apply"}
                     </Text>
                   </Pressable>
-                  <Pressable
-                    style={styles.promptCancelBtn}
-                    onPress={() => setPromptMode(null)}
-                  >
+                  <Pressable style={styles.promptCancelBtn} onPress={() => setPromptMode(null)}>
                     <Text style={styles.promptCancelText}>Cancel</Text>
                   </Pressable>
                 </View>
@@ -1612,9 +1702,7 @@ export function PyCharmGitModal({
                     testID="pycharm-git-resolve-3way-btn"
                   >
                     <Layers size={12} color="#0f172a" />
-                    <Text style={styles.conflictBannerPrimaryText}>
-                      Resolve in 3-Way Merge...
-                    </Text>
+                    <Text style={styles.conflictBannerPrimaryText}>Resolve in 3-Way Merge...</Text>
                   </Pressable>
                 ) : null}
                 {conflictState.inProgress ? (
@@ -1847,10 +1935,7 @@ export function PyCharmGitModal({
                 ) : null}
 
                 {/* Tags Section */}
-                <Pressable
-                  style={styles.refGroupHeader}
-                  onPress={() => setTagsOpen((v) => !v)}
-                >
+                <Pressable style={styles.refGroupHeader} onPress={() => setTagsOpen((v) => !v)}>
                   {tagsOpen ? (
                     <ChevronDown size={13} color="#94a3b8" />
                   ) : (
@@ -1865,10 +1950,7 @@ export function PyCharmGitModal({
                       return (
                         <Pressable
                           key={`tag-${tag.name}`}
-                          style={[
-                            styles.refTreeItem,
-                            isSelected && styles.refTreeItemSelected,
-                          ]}
+                          style={[styles.refTreeItem, isSelected && styles.refTreeItemSelected]}
                           onPress={() => {
                             setSelectedStashIndex(null);
                             setSelectedCompareRef(null);
@@ -1892,18 +1974,13 @@ export function PyCharmGitModal({
                   : null}
 
                 {/* Stashes / Shelf Section */}
-                <Pressable
-                  style={styles.refGroupHeader}
-                  onPress={() => setStashesOpen((v) => !v)}
-                >
+                <Pressable style={styles.refGroupHeader} onPress={() => setStashesOpen((v) => !v)}>
                   {stashesOpen ? (
                     <ChevronDown size={13} color="#94a3b8" />
                   ) : (
                     <ChevronRight size={13} color="#94a3b8" />
                   )}
-                  <Text style={styles.refGroupTitle}>
-                    Stashes ({filteredStashes.length})
-                  </Text>
+                  <Text style={styles.refGroupTitle}>Stashes ({filteredStashes.length})</Text>
                   <Pressable
                     style={styles.refGroupAddBtn}
                     onPress={() => {
@@ -1928,9 +2005,7 @@ export function PyCharmGitModal({
                           ]}
                           onPress={() => {
                             setSelectedCompareRef(null);
-                            setSelectedStashIndex((prev) =>
-                              prev === s.index ? null : s.index,
-                            );
+                            setSelectedStashIndex((prev) => (prev === s.index ? null : s.index));
                           }}
                         >
                           <Archive size={12} color="#f59e0b" />
@@ -2045,10 +2120,7 @@ export function PyCharmGitModal({
                     <Pressable
                       style={styles.miniActionPill}
                       onPress={() => {
-                        const localShort = selectedRemoteBranchObj.name.replace(
-                          /^[^/]+\//,
-                          "",
-                        );
+                        const localShort = selectedRemoteBranchObj.name.replace(/^[^/]+\//, "");
                         setPromptMode({
                           kind: "new-branch",
                           targetSha: selectedRemoteBranchObj.name,
@@ -2167,11 +2239,7 @@ export function PyCharmGitModal({
                 >
                   <Text style={styles.filterDropdownLabel}>Branch:</Text>
                   <Text style={styles.filterDropdownValue} numberOfLines={1}>
-                    {selectedRef
-                      ? selectedRef
-                      : allBranches
-                        ? "All"
-                        : currentBranch ?? "HEAD"}
+                    {selectedRef ? selectedRef : allBranches ? "All" : (currentBranch ?? "HEAD")}
                   </Text>
                   <ChevronDown size={11} color="#94a3b8" />
                 </Pressable>
@@ -2302,9 +2370,7 @@ export function PyCharmGitModal({
                           setAllBranches(true);
                         }}
                       >
-                        <Text style={styles.resetFiltersBtnText}>
-                          Reset All Filters
-                        </Text>
+                        <Text style={styles.resetFiltersBtnText}>Reset All Filters</Text>
                       </Pressable>
                     </View>
                   ) : null}
@@ -2322,10 +2388,7 @@ export function PyCharmGitModal({
                     return (
                       <Pressable
                         key={commit.sha}
-                        style={[
-                          styles.commitRow,
-                          isSelected && styles.commitRowSelected,
-                        ]}
+                        style={[styles.commitRow, isSelected && styles.commitRowSelected]}
                         onPress={() => {
                           setSelectedStashIndex(null);
                           setSelectedCompareRef(null);
@@ -2366,18 +2429,9 @@ export function PyCharmGitModal({
                                   >
                                     <Tag
                                       size={9}
-                                      color={
-                                        isHead
-                                          ? "#f59e0b"
-                                          : isTag
-                                            ? "#f43f5e"
-                                            : "#10b981"
-                                      }
+                                      color={isHead ? "#f59e0b" : isTag ? "#f43f5e" : "#10b981"}
                                     />
-                                    <Text
-                                      style={styles.pycharmRefBadgeText}
-                                      numberOfLines={1}
-                                    >
+                                    <Text style={styles.pycharmRefBadgeText} numberOfLines={1}>
                                       {cleanLabel}
                                     </Text>
                                   </View>
@@ -2389,10 +2443,7 @@ export function PyCharmGitModal({
 
                         {/* Column 2: Fixed-Width Author Column */}
                         <Text
-                          style={[
-                            styles.commitAuthorCol,
-                            isSelected && styles.commitMetaSelected,
-                          ]}
+                          style={[styles.commitAuthorCol, isSelected && styles.commitMetaSelected]}
                           numberOfLines={1}
                         >
                           {commit.authorName}
@@ -2400,10 +2451,7 @@ export function PyCharmGitModal({
 
                         {/* Column 3: Fixed-Width Date/Time Column (`8/10/26, 18:27`) */}
                         <Text
-                          style={[
-                            styles.commitDateCol,
-                            isSelected && styles.commitMetaSelected,
-                          ]}
+                          style={[styles.commitDateCol, isSelected && styles.commitMetaSelected]}
                           numberOfLines={1}
                         >
                           {formatPyCharmTableDate(commit.authorDate)}
@@ -2428,10 +2476,7 @@ export function PyCharmGitModal({
                         <Text style={styles.contextModePillText}>
                           stash@{`{${selectedStashIndex}}`} ({activeChangedFiles.length})
                         </Text>
-                        <Pressable
-                          onPress={() => setSelectedStashIndex(null)}
-                          hitSlop={6}
-                        >
+                        <Pressable onPress={() => setSelectedStashIndex(null)} hitSlop={6}>
                           <X size={11} color="#94a3b8" />
                         </Pressable>
                       </View>
@@ -2441,10 +2486,7 @@ export function PyCharmGitModal({
                         <Text style={styles.contextModePillText}>
                           {selectedCompareRef} ↔ HEAD ({activeChangedFiles.length})
                         </Text>
-                        <Pressable
-                          onPress={() => setSelectedCompareRef(null)}
-                          hitSlop={6}
-                        >
+                        <Pressable onPress={() => setSelectedCompareRef(null)} hitSlop={6}>
                           <X size={11} color="#94a3b8" />
                         </Pressable>
                       </View>
@@ -2459,10 +2501,7 @@ export function PyCharmGitModal({
                   <View style={styles.rightFilesToolbarRight}>
                     {/* Open Full-Screen Repository Diff Button (`pycharm-ref-2.png`) */}
                     <Pressable
-                      style={[
-                        styles.openRepoDiffBtn,
-                        !selectedFilePath && styles.btnDisabled,
-                      ]}
+                      style={[styles.openRepoDiffBtn, !selectedFilePath && styles.btnDisabled]}
                       disabled={!selectedFilePath}
                       onPress={() => setRepoDiffModalOpen(true)}
                       testID="pycharm-open-repository-diff-btn"
@@ -2473,10 +2512,7 @@ export function PyCharmGitModal({
 
                     {/* Group by Directory Toggle */}
                     <Pressable
-                      style={[
-                        styles.iconToggleBtn,
-                        groupFilesByDir && styles.iconToggleBtnActive,
-                      ]}
+                      style={[styles.iconToggleBtn, groupFilesByDir && styles.iconToggleBtnActive]}
                       onPress={() => setGroupFilesByDir((v) => !v)}
                       testID="pycharm-group-by-dir-btn"
                     >
@@ -2490,9 +2526,7 @@ export function PyCharmGitModal({
                         if (collapsedFileDirs.size > 0) {
                           setCollapsedFileDirs(new Set());
                         } else {
-                          setCollapsedFileDirs(
-                            new Set(groupedChangedFiles.map((g) => g.dirPath)),
-                          );
+                          setCollapsedFileDirs(new Set(groupedChangedFiles.map((g) => g.dirPath)));
                         }
                       }}
                     >
@@ -2516,10 +2550,7 @@ export function PyCharmGitModal({
                 </View>
 
                 {/* Changed Files Hierarchical Tree Body */}
-                <ScrollView
-                  style={styles.rightFilesTreeScroll}
-                  showsVerticalScrollIndicator
-                >
+                <ScrollView style={styles.rightFilesTreeScroll} showsVerticalScrollIndicator>
                   {activeChangedFiles.length === 0 ? (
                     <View style={styles.emptyFilesBox}>
                       <Text style={styles.emptyText}>No changed files</Text>
@@ -2547,23 +2578,18 @@ export function PyCharmGitModal({
                               {group.dirPath === "." ? "(root)" : group.dirPath}
                             </Text>
                             <Text style={styles.fileDirCountText}>
-                              {group.files.length}{" "}
-                              {group.files.length === 1 ? "file" : "files"}
+                              {group.files.length} {group.files.length === 1 ? "file" : "files"}
                             </Text>
                           </Pressable>
 
                           {!isCollapsed
-                            ? group.files.map((f) =>
-                                renderChangedFileRow(f, false, true),
-                              )
+                            ? group.files.map((f) => renderChangedFileRow(f, false, true))
                             : null}
                         </View>
                       );
                     })
                   ) : (
-                    activeChangedFiles.map((f) =>
-                      renderChangedFileRow(f, true, false),
-                    )
+                    activeChangedFiles.map((f) => renderChangedFileRow(f, true, false))
                   )}
                 </ScrollView>
               </View>
@@ -2571,10 +2597,7 @@ export function PyCharmGitModal({
               {/* BOTTOM HALF: Commit Message, Metadata & Operations (`pycharm-ref-1.png` bottom-right) */}
               <View style={styles.rightBottomDetailsPane}>
                 {selectedStashIndex !== null ? (
-                  <ScrollView
-                    style={styles.commitDetailsScroll}
-                    showsVerticalScrollIndicator
-                  >
+                  <ScrollView style={styles.commitDetailsScroll} showsVerticalScrollIndicator>
                     <View style={styles.compactOpsStrip}>
                       <Pressable
                         style={styles.compactOpPill}
@@ -2624,15 +2647,13 @@ export function PyCharmGitModal({
                     </Text>
                   </ScrollView>
                 ) : selectedCompareRef !== null ? (
-                  <ScrollView
-                    style={styles.commitDetailsScroll}
-                    showsVerticalScrollIndicator
-                  >
+                  <ScrollView style={styles.commitDetailsScroll} showsVerticalScrollIndicator>
                     <Text style={styles.pycharmCommitSubjectTitle}>
                       Comparing {selectedCompareRef} ↔ HEAD ({currentBranch ?? "HEAD"})
                     </Text>
                     <Text style={styles.pycharmCommitMetaFooter}>
-                      Click any file above or press Diff (⌘D) to open the full-screen Side-by-Side Repository Diff.
+                      Click any file above or press Diff (⌘D) to open the full-screen Side-by-Side
+                      Repository Diff.
                     </Text>
                   </ScrollView>
                 ) : !selectedCommit ? (
@@ -2640,10 +2661,7 @@ export function PyCharmGitModal({
                     <Text style={styles.emptyText}>Select a commit to view details</Text>
                   </View>
                 ) : (
-                  <ScrollView
-                    style={styles.commitDetailsScroll}
-                    showsVerticalScrollIndicator
-                  >
+                  <ScrollView style={styles.commitDetailsScroll} showsVerticalScrollIndicator>
                     {/* Compact Commit Operations Toolbar */}
                     <View style={styles.compactOpsStrip}>
                       <Pressable
@@ -2805,14 +2823,10 @@ export function PyCharmGitModal({
                     </View>
 
                     {/* PyCharm Commit Subject & Body (`pycharm-ref-1.png` bottom-right) */}
-                    <Text style={styles.pycharmCommitSubjectTitle}>
-                      {selectedCommit.subject}
-                    </Text>
+                    <Text style={styles.pycharmCommitSubjectTitle}>{selectedCommit.subject}</Text>
 
                     {selectedCommit.body ? (
-                      <Text style={styles.pycharmCommitBodyText}>
-                        {selectedCommit.body}
-                      </Text>
+                      <Text style={styles.pycharmCommitBodyText}>{selectedCommit.body}</Text>
                     ) : null}
 
                     {/* PyCharm Footer Line: `<sha> <author> <email> on <date> at <time>` */}
@@ -2822,16 +2836,12 @@ export function PyCharmGitModal({
                           onPress={() => void handleCopySha(selectedCommit.sha)}
                           style={styles.pycharmInlineShaBtn}
                         >
-                          <Text style={styles.pycharmInlineShaText}>
-                            {selectedCommit.shortSha}
-                          </Text>
+                          <Text style={styles.pycharmInlineShaText}>{selectedCommit.shortSha}</Text>
                           <Copy size={10} color="#64748b" />
                         </Pressable>
                         <Text style={styles.pycharmCommitMetaFooter}>
                           {selectedCommit.authorName}{" "}
-                          {selectedCommit.authorEmail
-                            ? `<${selectedCommit.authorEmail}>`
-                            : ""}{" "}
+                          {selectedCommit.authorEmail ? `<${selectedCommit.authorEmail}>` : ""}{" "}
                           {formatPyCharmFullDate(selectedCommit.authorDate)}
                         </Text>
                       </View>
@@ -2864,10 +2874,7 @@ export function PyCharmGitModal({
                 {/* Prev / Next Hunk (`↑` `↓`) */}
                 <View style={styles.repoDiffNavGroup}>
                   <Pressable
-                    style={[
-                      styles.repoDiffNavBtn,
-                      hunkCount <= 1 && styles.btnDisabled,
-                    ]}
+                    style={[styles.repoDiffNavBtn, hunkCount <= 1 && styles.btnDisabled]}
                     disabled={hunkCount <= 1}
                     onPress={() =>
                       setActiveHunkIndex((prev) =>
@@ -2878,15 +2885,10 @@ export function PyCharmGitModal({
                     <ArrowUp size={13} color="#cbd5e1" />
                   </Pressable>
                   <Pressable
-                    style={[
-                      styles.repoDiffNavBtn,
-                      hunkCount <= 1 && styles.btnDisabled,
-                    ]}
+                    style={[styles.repoDiffNavBtn, hunkCount <= 1 && styles.btnDisabled]}
                     disabled={hunkCount <= 1}
                     onPress={() =>
-                      setActiveHunkIndex((prev) =>
-                        hunkCount > 0 ? (prev + 1) % hunkCount : 0,
-                      )
+                      setActiveHunkIndex((prev) => (hunkCount > 0 ? (prev + 1) % hunkCount : 0))
                     }
                   >
                     <ArrowDown size={13} color="#cbd5e1" />
@@ -2896,16 +2898,11 @@ export function PyCharmGitModal({
                 {/* Prev / Next Changed File in Commit (`← 4/11 files →`) */}
                 <View style={styles.repoDiffFileSwitcher}>
                   <Pressable
-                    style={[
-                      styles.repoDiffNavBtn,
-                      selectedFileIndex <= 0 && styles.btnDisabled,
-                    ]}
+                    style={[styles.repoDiffNavBtn, selectedFileIndex <= 0 && styles.btnDisabled]}
                     disabled={selectedFileIndex <= 0}
                     onPress={() => {
                       if (selectedFileIndex > 0) {
-                        setSelectedFilePath(
-                          activeChangedFiles[selectedFileIndex - 1].path,
-                        );
+                        setSelectedFilePath(activeChangedFiles[selectedFileIndex - 1].path);
                       }
                     }}
                     testID="repo-diff-prev-file-btn"
@@ -2928,17 +2925,14 @@ export function PyCharmGitModal({
                         styles.btnDisabled,
                     ]}
                     disabled={
-                      selectedFileIndex === -1 ||
-                      selectedFileIndex >= activeChangedFiles.length - 1
+                      selectedFileIndex === -1 || selectedFileIndex >= activeChangedFiles.length - 1
                     }
                     onPress={() => {
                       if (
                         selectedFileIndex >= 0 &&
                         selectedFileIndex < activeChangedFiles.length - 1
                       ) {
-                        setSelectedFilePath(
-                          activeChangedFiles[selectedFileIndex + 1].path,
-                        );
+                        setSelectedFilePath(activeChangedFiles[selectedFileIndex + 1].path);
                       }
                     }}
                     testID="repo-diff-next-file-btn"
@@ -4050,5 +4044,83 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: 11.5,
     fontWeight: theme.fontWeight.medium,
     color: "#60a5fa",
+  },
+  inlineBranchActionStrip: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginHorizontal: 8,
+    marginBottom: 4,
+    borderRadius: 6,
+    backgroundColor: "#25262a",
+    borderWidth: 1,
+    borderColor: "rgba(6, 182, 212, 0.28)",
+  },
+  inlineBranchMergeBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    backgroundColor: "rgba(6, 182, 212, 0.16)",
+    borderWidth: 1,
+    borderColor: "rgba(6, 182, 212, 0.45)",
+  },
+  inlineBranchMergeText: {
+    fontSize: 10,
+    fontWeight: theme.fontWeight.semibold,
+    color: "#06b6d4",
+  },
+  inlineBranchNeutralBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    backgroundColor: "rgba(148, 163, 184, 0.14)",
+    borderWidth: 1,
+    borderColor: "rgba(148, 163, 184, 0.32)",
+  },
+  inlineBranchNeutralText: {
+    fontSize: 10,
+    fontWeight: theme.fontWeight.medium,
+    color: "#cbd5e1",
+  },
+  inlineBranchDangerBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    backgroundColor: "rgba(244, 63, 94, 0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(244, 63, 94, 0.4)",
+  },
+  inlineBranchDangerText: {
+    fontSize: 10,
+    fontWeight: theme.fontWeight.medium,
+    color: "#f43f5e",
+  },
+  headerMergeBranchBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    backgroundColor: "rgba(6, 182, 212, 0.18)",
+    borderWidth: 1,
+    borderColor: "rgba(6, 182, 212, 0.5)",
+  },
+  headerMergeBranchBtnText: {
+    fontSize: 11,
+    fontWeight: theme.fontWeight.semibold,
+    color: "#06b6d4",
   },
 }));

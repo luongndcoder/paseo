@@ -1,7 +1,14 @@
 import { resolve, dirname, basename } from "path";
 import { tmpdir } from "os";
 import { existsSync, realpathSync } from "fs";
-import { chmod, open as openFile, readFile, stat as statFile, unlink, writeFile } from "fs/promises";
+import {
+  chmod,
+  open as openFile,
+  readFile,
+  stat as statFile,
+  unlink,
+  writeFile,
+} from "fs/promises";
 import { setImmediate } from "node:timers/promises";
 import { TTLCache } from "@isaacs/ttlcache";
 import type {
@@ -3182,6 +3189,101 @@ export async function getGitCompareDetail(
   };
 }
 
+function isDirtyTreeGitError(error: unknown): boolean {
+  const details =
+    error instanceof Error
+      ? `${error.message}\n${getErrorStderr(error)}\n${getErrorStdout(error)}`
+      : String(error);
+  return /overwritten by merge|overwritten by checkout|Please commit your changes or stash them|cannot rebase: You have unstaged changes|cannot rebase: Your index contains uncommitted changes|local changes to the following files would be overwritten|local changes would be overwritten/i.test(
+    details,
+  );
+}
+
+async function executeSmartGitOperation({
+  cwd,
+  operationLabel,
+  target,
+  gitArgs,
+  successMessage,
+}: {
+  cwd: string;
+  operationLabel: string;
+  target: string;
+  gitArgs: string[];
+  successMessage: string;
+}): Promise<{ success: boolean; message: string }> {
+  try {
+    await runGitCommand(gitArgs, { cwd, timeout: 120_000 });
+    return { success: true, message: successMessage };
+  } catch (initialError) {
+    if (isDirtyTreeGitError(initialError)) {
+      const beforeStash = (
+        await runGitCommand(["stash", "list", "-n", "1", "--format=%H"], {
+          cwd,
+          envOverlay: READ_ONLY_GIT_ENV,
+        }).catch(() => ({ stdout: "" }))
+      ).stdout.trim();
+
+      await runGitCommand(
+        ["stash", "push", "-u", "-m", `Paseo Smart ${operationLabel} auto-stash (${target})`],
+        { cwd, timeout: 120_000 },
+      ).catch(() => {});
+
+      const afterStash = (
+        await runGitCommand(["stash", "list", "-n", "1", "--format=%H"], {
+          cwd,
+          envOverlay: READ_ONLY_GIT_ENV,
+        }).catch(() => ({ stdout: "" }))
+      ).stdout.trim();
+      const didAutoStash = Boolean(afterStash && afterStash !== beforeStash);
+
+      if (didAutoStash) {
+        try {
+          await runGitCommand(gitArgs, { cwd, timeout: 120_000 });
+          try {
+            await runGitCommand(["stash", "pop"], { cwd, timeout: 120_000 });
+            return {
+              success: true,
+              message: `Smart ${operationLabel}: auto-stashed local changes, completed ${operationLabel.toLowerCase()} of ${target}, and restored local changes`,
+            };
+          } catch {
+            const popConflict = await detectGitConflictState(cwd);
+            if (popConflict.conflictFiles.length > 0) {
+              return {
+                success: true,
+                message: `CONFLICT: Smart ${operationLabel} of ${target} succeeded, but restoring stashed local changes produced ${popConflict.conflictFiles.length} conflict(s) (${popConflict.conflictFiles.join(", ")}).`,
+              };
+            }
+            return {
+              success: true,
+              message: `Smart ${operationLabel}: completed ${operationLabel.toLowerCase()} of ${target} (local changes remain in stash@{0})`,
+            };
+          }
+        } catch (retryError) {
+          const retryConflict = await detectGitConflictState(cwd);
+          if (retryConflict.conflictFiles.length > 0) {
+            return {
+              success: true,
+              message: `CONFLICT: Smart ${operationLabel} of ${target} resulted in ${retryConflict.conflictFiles.length} conflict(s) (${retryConflict.conflictFiles.join(", ")}). Local changes are safely stashed in stash@{0}.`,
+            };
+          }
+          await runGitCommand(["stash", "pop"], { cwd, timeout: 120_000 }).catch(() => {});
+          throw retryError;
+        }
+      }
+    }
+
+    const conflictState = await detectGitConflictState(cwd);
+    if (conflictState.conflictFiles.length > 0) {
+      return {
+        success: true,
+        message: `CONFLICT: ${operationLabel} of ${target} resulted in ${conflictState.conflictFiles.length} conflict(s) (${conflictState.conflictFiles.join(", ")}).`,
+      };
+    }
+    throw initialError;
+  }
+}
+
 export async function executeGitLogAction(
   cwd: string,
   gitAction: CheckoutGitLogAction,
@@ -3204,20 +3306,26 @@ export async function executeGitLogAction(
 
   switch (gitAction.kind) {
     case "cherry-pick": {
-      await runGitCommand(["cherry-pick", target], { cwd, timeout: 120_000 });
-      return { success: true, message: `Cherry-picked ${target.slice(0, 7)}` };
+      return executeSmartGitOperation({
+        cwd,
+        operationLabel: "Cherry-pick",
+        target,
+        gitArgs: ["cherry-pick", target],
+        successMessage: `Cherry-picked ${target.slice(0, 7)}`,
+      });
     }
     case "revert": {
-      await runGitCommand(["revert", "--no-edit", target], { cwd, timeout: 120_000 });
-      return { success: true, message: `Reverted ${target.slice(0, 7)}` };
+      return executeSmartGitOperation({
+        cwd,
+        operationLabel: "Revert",
+        target,
+        gitArgs: ["revert", "--no-edit", target],
+        successMessage: `Reverted ${target.slice(0, 7)}`,
+      });
     }
     case "reset": {
       const modeFlag =
-        gitAction.mode === "soft"
-          ? "--soft"
-          : gitAction.mode === "hard"
-            ? "--hard"
-            : "--mixed";
+        gitAction.mode === "soft" ? "--soft" : gitAction.mode === "hard" ? "--hard" : "--mixed";
       await runGitCommand(["reset", modeFlag, target], { cwd, timeout: 120_000 });
       return {
         success: true,
@@ -3225,8 +3333,33 @@ export async function executeGitLogAction(
       };
     }
     case "checkout-ref": {
-      await runGitCommand(["checkout", target], { cwd, timeout: 120_000 });
-      return { success: true, message: `Checked out ${target}` };
+      let checkoutArgs = ["checkout", target];
+      let checkoutLabel = target;
+      const isRemoteRef = await runGitCommand(
+        ["show-ref", "--verify", "--quiet", `refs/remotes/${target}`],
+        { cwd, envOverlay: READ_ONLY_GIT_ENV, acceptExitCodes: [0, 1] },
+      ).catch(() => ({ exitCode: 1 }));
+      if (isRemoteRef.exitCode === 0 && target.includes("/")) {
+        const localBranchName = target.slice(target.indexOf("/") + 1);
+        const hasLocalBranch = await runGitCommand(
+          ["show-ref", "--verify", "--quiet", `refs/heads/${localBranchName}`],
+          { cwd, envOverlay: READ_ONLY_GIT_ENV, acceptExitCodes: [0, 1] },
+        ).catch(() => ({ exitCode: 1 }));
+        if (hasLocalBranch.exitCode === 0) {
+          checkoutArgs = ["checkout", localBranchName];
+          checkoutLabel = localBranchName;
+        } else {
+          checkoutArgs = ["checkout", "--track", target];
+          checkoutLabel = `${localBranchName} (tracking ${target})`;
+        }
+      }
+      return executeSmartGitOperation({
+        cwd,
+        operationLabel: "Checkout",
+        target: checkoutLabel,
+        gitArgs: checkoutArgs,
+        successMessage: `Checked out ${checkoutLabel}`,
+      });
     }
     case "create-branch": {
       const args = ["checkout", "-b", target];
@@ -3242,12 +3375,22 @@ export async function executeGitLogAction(
       return { success: true, message: `Deleted branch ${target}` };
     }
     case "merge-ref": {
-      await runGitCommand(["merge", "--no-edit", target], { cwd, timeout: 120_000 });
-      return { success: true, message: `Merged ${target} into current branch` };
+      return executeSmartGitOperation({
+        cwd,
+        operationLabel: "Merge",
+        target,
+        gitArgs: ["merge", "--no-edit", target],
+        successMessage: `Merged ${target} into current branch`,
+      });
     }
     case "rebase-onto": {
-      await runGitCommand(["rebase", target], { cwd, timeout: 120_000 });
-      return { success: true, message: `Rebased current branch onto ${target}` };
+      return executeSmartGitOperation({
+        cwd,
+        operationLabel: "Rebase",
+        target,
+        gitArgs: ["rebase", target],
+        successMessage: `Rebased current branch onto ${target}`,
+      });
     }
     case "create-tag": {
       const args = ["tag", target];
@@ -3547,14 +3690,11 @@ export async function getGitFileBlame(
   if (!trimmedPath || trimmedPath.startsWith("-")) {
     throw new Error(`Invalid file path for git blame: ${filePath}`);
   }
-  const { stdout } = await runGitCommand(
-    ["blame", "--line-porcelain", "HEAD", "--", trimmedPath],
-    {
-      cwd,
-      envOverlay: READ_ONLY_GIT_ENV,
-      maxOutputBytes: 16 * 1024 * 1024,
-    },
-  );
+  const { stdout } = await runGitCommand(["blame", "--line-porcelain", "HEAD", "--", trimmedPath], {
+    cwd,
+    envOverlay: READ_ONLY_GIT_ENV,
+    maxOutputBytes: 16 * 1024 * 1024,
+  });
 
   const lines = stdout.split("\n");
   const result: CheckoutGitBlameLine[] = [];
@@ -3599,7 +3739,6 @@ export async function getGitFileBlame(
 
   return result;
 }
-
 
 /**
  * Fetches the unified diff of a single file as introduced by one commit and
@@ -4497,10 +4636,7 @@ export async function getCheckoutDiff(
   return { diff: diffText };
 }
 
-async function annotateUncommittedStageStatus(
-  cwd: string,
-  files: ParsedDiffFile[],
-): Promise<void> {
+async function annotateUncommittedStageStatus(cwd: string, files: ParsedDiffFile[]): Promise<void> {
   if (files.length === 0) return;
   try {
     const status = await runGitCommand(["status", "--porcelain=v1", "-z", "-uall"], {

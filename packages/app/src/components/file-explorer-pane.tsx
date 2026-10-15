@@ -15,6 +15,7 @@ import {
   ListRenderItemInfo,
   Pressable,
   Text,
+  TextInput as RNTextInput,
   View,
   type NativeSyntheticEvent,
   type PressableStateCallbackType,
@@ -1503,7 +1504,7 @@ function FileExplorerPaneContent(props: FileExplorerPaneContentProps) {
       <View style={styles.searchBarContainer}>
         <View style={styles.searchInputWrapper}>
           <Search size={13} color={theme.colors.foregroundMuted} />
-          <TextInput
+          <RNTextInput
             value={searchQuery}
             onChangeText={onSearchQueryChange}
             onKeyPress={handleSearchKeyPress}
@@ -2034,7 +2035,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   entryParentPath: {
     color: theme.colors.foregroundExtraMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     userSelect: "none",
   },
   draftInput: {

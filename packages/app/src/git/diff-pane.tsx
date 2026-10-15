@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -17,6 +18,8 @@ import {
   View,
   Text,
   Pressable,
+  PanResponder,
+  ScrollView,
   type PressableStateCallbackType,
   type StyleProp,
   type ViewStyle,
@@ -28,12 +31,15 @@ import { useFetchQuery } from "@/data/query";
 import type { Theme } from "@/styles/theme";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import {
+  AlertTriangle,
   AlignJustify,
   Archive,
   ChevronDown,
   Columns2,
   ExternalLink,
+  GitBranch,
   GitGraph,
+  GitMerge,
   ListChevronsDownUp,
   ListChevronsUpDown,
   Maximize,
@@ -58,6 +64,7 @@ import {
 } from "@/git/use-pr-status-query";
 import { CommitsSection } from "@/git/commits-section/commits-section";
 import { PyCharmGitModal } from "@/git/pycharm-git-window/pycharm-git-modal";
+import { MergeConflictResolverModal } from "@/git/pycharm-git-window/merge-conflict-resolver-modal";
 import { useAppSettings } from "@/hooks/use-settings";
 import { useChangesPreferences } from "@/hooks/use-changes-preferences";
 import {
@@ -526,6 +533,10 @@ interface ChangesRepositoryToolbarModel {
   cwd: string;
   gitActions: GitActions | null;
   onOpenGitLog?: () => void;
+  onOpenConflictResolver?: (
+    conflictFiles?: string[],
+    inProgress?: "merge" | "rebase" | "cherry-pick" | "conflict" | null,
+  ) => void;
   pullRequest: ChangesPullRequestLinkModel | null;
   serverId: string;
   workspaceId?: string | null;
@@ -556,6 +567,10 @@ interface BuildChangesHeaderModelInput {
   gitActions: GitActions;
   mode: ChangesToolbarMode;
   onOpenGitLog?: () => void;
+  onOpenConflictResolver?: (
+    conflictFiles?: string[],
+    inProgress?: "merge" | "rebase" | "cherry-pick" | "conflict" | null,
+  ) => void;
   onOpenPullRequest: () => void;
   onSelectBase: () => void;
   onSelectUncommitted: () => void;
@@ -575,6 +590,7 @@ function buildChangesHeaderModel(input: BuildChangesHeaderModelInput): {
       cwd: input.cwd,
       gitActions: input.compact ? input.gitActions : null,
       onOpenGitLog: input.onOpenGitLog,
+      onOpenConflictResolver: input.onOpenConflictResolver,
       pullRequest: input.pullRequest
         ? { ...input.pullRequest, onOpen: input.onOpenPullRequest }
         : null,
@@ -689,7 +705,7 @@ const SparklesIcon = withUnistyles(Sparkles, (theme: Theme) => ({
 
 interface StashEntry {
   index: number;
-  branch: string;
+  branch: string | null;
   message: string;
 }
 
@@ -969,7 +985,7 @@ function ChangesStashMenu({ model }: { model: ChangesRepositoryToolbarModel }) {
         <View style={styles.stashMenuContent}>
           <View style={styles.stashComposerRow}>
             <EditingTextInput
-              value={stashMessage}
+              initialValue={stashMessage}
               onChangeText={setStashMessage}
               placeholder="Stash message (optional)..."
               placeholderTextColor="#888"
@@ -1002,6 +1018,419 @@ function ChangesStashMenu({ model }: { model: ChangesRepositoryToolbarModel }) {
   );
 }
 
+function ChangesMergeMenu({ model }: { model: ChangesRepositoryToolbarModel }) {
+  const [open, setOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isBusy, setIsBusy] = useState(false);
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const client = useSessionStore((state) => state.sessions[model.serverId]?.client ?? null);
+  const mergeBranchesQueryKey = useMemo(
+    () => ["mergeBranches", model.serverId, model.workspaceId ?? model.cwd] as const,
+    [model.cwd, model.serverId, model.workspaceId],
+  );
+  const mergeBranchesQuery = useFetchQuery({
+    queryKey: mergeBranchesQueryKey,
+    dataShape: "list",
+    staleTimeMs: 5_000,
+    enabled: Boolean(client),
+    queryFn: async () => {
+      if (!client) {
+        return {
+          branches: [],
+          remoteBranches: [],
+          currentBranch: model.branchName,
+          conflictState: { inProgress: null, conflictFiles: [] as string[] },
+        };
+      }
+      const res = await client.queryGitGraphLog(model.cwd, {
+        allBranches: true,
+        limit: 10,
+      });
+      return {
+        branches: res.branches ?? [],
+        remoteBranches: res.remoteBranches ?? [],
+        currentBranch: res.currentBranch ?? model.branchName,
+        conflictState: res.conflictState ?? { inProgress: null, conflictFiles: [] as string[] },
+      };
+    },
+  });
+
+  const currentBranch = mergeBranchesQuery.data?.currentBranch ?? model.branchName ?? "HEAD";
+  const conflictState = mergeBranchesQuery.data?.conflictState ?? {
+    inProgress: null,
+    conflictFiles: [] as string[],
+  };
+  const conflictCount = conflictState.conflictFiles.length;
+
+  const filteredLocalBranches = useMemo(() => {
+    const list = (mergeBranchesQuery.data?.branches ?? []).filter(
+      (b) => !b.isCurrent && b.name !== currentBranch,
+    );
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter((b) => b.name.toLowerCase().includes(q));
+  }, [currentBranch, mergeBranchesQuery.data?.branches, searchQuery]);
+
+  const filteredRemoteBranches = useMemo(() => {
+    const list = mergeBranchesQuery.data?.remoteBranches ?? [];
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter((b) => b.name.toLowerCase().includes(q));
+  }, [mergeBranchesQuery.data?.remoteBranches, searchQuery]);
+
+  const refreshGitState = useCallback(async () => {
+    await queryClient.invalidateQueries({ queryKey: mergeBranchesQueryKey });
+    await invalidateCheckoutGitQueriesForClient(queryClient, {
+      serverId: model.serverId,
+      cwd: model.cwd,
+    });
+  }, [mergeBranchesQueryKey, model.cwd, model.serverId, queryClient]);
+
+  const handleBranchAction = useCallback(
+    async (kind: "merge-ref" | "rebase-onto" | "checkout-ref", targetRef: string) => {
+      if (!client || isBusy) {
+        return;
+      }
+      if (kind === "merge-ref" || kind === "rebase-onto") {
+        setOpen(false);
+        const isMerge = kind === "merge-ref";
+        const confirmed = await confirmDialog({
+          title: isMerge
+            ? `Merge '${targetRef}' into '${currentBranch}'?`
+            : `Rebase '${currentBranch}' onto '${targetRef}'?`,
+          message: isMerge
+            ? `Merge changes from '${targetRef}' into current branch '${currentBranch}'. Uncommitted local changes will be auto-stashed and restored automatically.`
+            : `Rebase current branch '${currentBranch}' onto '${targetRef}'. Uncommitted local changes will be auto-stashed and restored automatically.`,
+          confirmLabel: isMerge ? "Merge Branch" : "Rebase Branch",
+          cancelLabel: "Cancel",
+          branchFlow: isMerge
+            ? { from: targetRef, to: currentBranch, actionLabel: "MERGE INTO" }
+            : { from: currentBranch, to: targetRef, actionLabel: "REBASE ONTO" },
+          badges: [
+            { label: "Auto-Stash: ON", tone: "emerald" },
+            { label: "3-Way Conflict Resolver", tone: "cyan" },
+          ],
+        });
+        if (!confirmed) {
+          return;
+        }
+      }
+      setIsBusy(true);
+      try {
+        const response = await client.runGitLogAction(model.cwd, {
+          kind,
+          target: targetRef,
+        });
+        await refreshGitState();
+        const msg = response.message || `Completed ${kind} ${targetRef}`;
+        if (msg.startsWith("CONFLICT:")) {
+          toast.error(msg);
+          setOpen(false);
+          const refreshed = await client.queryGitGraphLog(model.cwd, {
+            allBranches: false,
+            limit: 5,
+          });
+          model.onOpenConflictResolver?.(
+            refreshed.conflictState?.conflictFiles ?? [],
+            refreshed.conflictState?.inProgress ?? "merge",
+          );
+          return;
+        }
+        toast.show(msg, { variant: "success" });
+        setOpen(false);
+      } catch (cause) {
+        await refreshGitState();
+        toast.error(cause instanceof Error ? cause.message : `Git ${kind} failed`);
+      } finally {
+        setIsBusy(false);
+      }
+    },
+    [client, currentBranch, isBusy, model, refreshGitState, toast],
+  );
+
+  const handleOperationControl = useCallback(
+    async (kind: "continue-operation" | "abort-operation") => {
+      if (!client || isBusy) {
+        return;
+      }
+      setIsBusy(true);
+      try {
+        const res = await client.runGitLogAction(model.cwd, {
+          kind,
+          target: "auto",
+        });
+        await refreshGitState();
+        toast.show(res.message || `Completed ${kind}`, { variant: "success" });
+      } catch (cause) {
+        toast.error(cause instanceof Error ? cause.message : `Failed ${kind}`);
+      } finally {
+        setIsBusy(false);
+      }
+    },
+    [client, isBusy, model.cwd, refreshGitState, toast],
+  );
+
+  if (!client) {
+    return null;
+  }
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger
+        testID="changes-merge-menu-trigger"
+        accessibilityRole="button"
+        accessibilityLabel="PyCharm Quick Merge & Branch Actions"
+        style={(state) => [
+          toolbarLabelTriggerStyle(state),
+          conflictCount > 0 ? styles.mergeToolbarTriggerConflict : styles.mergeToolbarTriggerNormal,
+        ]}
+      >
+        {(state) => {
+          const highlighted = isToolbarLabelTriggerHighlighted(state);
+          return (
+            <>
+              <ToolbarLabelTriggerIcon>
+                {conflictCount > 0 ? (
+                  <AlertTriangle size={13} color="#f59e0b" />
+                ) : (
+                  <GitMerge size={13} color="#10b981" />
+                )}
+              </ToolbarLabelTriggerIcon>
+              <Text
+                style={[
+                  toolbarLabelTriggerTextStyle(highlighted),
+                  conflictCount > 0
+                    ? { color: "#f59e0b", fontWeight: "700" as const }
+                    : { color: "#10b981", fontWeight: "600" as const },
+                ]}
+              >
+                {conflictCount > 0 ? `Conflicts (${conflictCount})` : "Merge..."}
+              </Text>
+            </>
+          );
+        }}
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <View style={styles.mergeMenuContent} testID="changes-merge-menu-content">
+          <View style={styles.mergeMenuHeaderRow}>
+            <Text style={styles.mergeMenuHeaderTitle} numberOfLines={1}>
+              Merge / Rebase into{" "}
+              <Text style={styles.mergeMenuCurrentBranchHighlight}>{currentBranch}</Text>
+            </Text>
+            <Text style={styles.mergeMenuAutoStashBadge}>Auto-Stash ON</Text>
+          </View>
+
+          {conflictCount > 0 || conflictState.inProgress ? (
+            <View style={styles.mergeConflictCalloutBox}>
+              <View style={styles.mergeConflictCalloutHeader}>
+                <AlertTriangle size={13} color="#f59e0b" />
+                <Text style={styles.mergeConflictCalloutTitle}>
+                  {conflictState.inProgress
+                    ? `${conflictState.inProgress.toUpperCase()} IN PROGRESS`
+                    : "UNRESOLVED CONFLICTS"}{" "}
+                  ({conflictCount} file{conflictCount === 1 ? "" : "s"})
+                </Text>
+              </View>
+              <View style={styles.mergeConflictCalloutActions}>
+                {conflictCount > 0 ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => {
+                      setOpen(false);
+                      model.onOpenConflictResolver?.(
+                        conflictState.conflictFiles,
+                        conflictState.inProgress ?? "merge",
+                      );
+                    }}
+                    style={styles.mergeResolvePrimaryBtn}
+                    testID="changes-merge-open-3way-resolver"
+                  >
+                    <Text style={styles.mergeResolvePrimaryBtnText}>
+                      Resolve in 3-Way Merge ({conflictCount})
+                    </Text>
+                  </Pressable>
+                ) : null}
+                {conflictState.inProgress ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={isBusy}
+                    onPress={() => void handleOperationControl("continue-operation")}
+                    style={styles.mergeContinuePill}
+                  >
+                    <Text style={styles.mergeContinuePillText}>Continue</Text>
+                  </Pressable>
+                ) : null}
+                {conflictState.inProgress ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={isBusy}
+                    onPress={() => void handleOperationControl("abort-operation")}
+                    style={styles.mergeAbortPill}
+                  >
+                    <Text style={styles.mergeAbortPillText}>Abort</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            </View>
+          ) : null}
+
+          <View style={styles.stashComposerRow}>
+            <EditingTextInput
+              initialValue={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholder={`Search branch to merge into '${currentBranch}'...`}
+              placeholderTextColor="#888"
+              style={styles.stashInput}
+              editable={!isBusy}
+              testID="changes-merge-search-input"
+            />
+          </View>
+          <DropdownMenuSeparator />
+
+          <ScrollView
+            style={styles.mergeBranchesScroll}
+            nestedScrollEnabled
+            showsVerticalScrollIndicator
+          >
+            {mergeBranchesQuery.isLoading ? (
+              <View style={styles.stashEmptyRow}>
+                <ThemedLoadingSpinner size="small" uniProps={foregroundMutedIconColorMapping} />
+              </View>
+            ) : filteredLocalBranches.length === 0 && filteredRemoteBranches.length === 0 ? (
+              <View style={styles.stashEmptyRow}>
+                <Text style={styles.stashEmptyText}>No other branches found</Text>
+              </View>
+            ) : (
+              <>
+                {filteredLocalBranches.length > 0 ? (
+                  <View style={styles.mergeSectionGroup}>
+                    <Text style={styles.mergeSectionHeader}>
+                      LOCAL BRANCHES ({filteredLocalBranches.length})
+                    </Text>
+                    {filteredLocalBranches.map((b) => (
+                      <View
+                        key={`merge-local-${b.name}`}
+                        style={styles.mergeBranchRow}
+                        testID={`changes-merge-branch-row-${b.name}`}
+                      >
+                        <View style={styles.mergeBranchInfo}>
+                          <GitBranch size={12} color="#10b981" />
+                          <Text style={styles.mergeBranchName} numberOfLines={1}>
+                            {b.name}
+                          </Text>
+                          {(b.ahead ?? 0) > 0 || (b.behind ?? 0) > 0 ? (
+                            <Text style={styles.mergeBranchAheadBehind}>
+                              {(b.ahead ?? 0) > 0 ? `↑${b.ahead}` : ""}
+                              {(b.behind ?? 0) > 0 ? `↓${b.behind}` : ""}
+                            </Text>
+                          ) : null}
+                        </View>
+                        <View style={styles.mergeBranchActions}>
+                          <Pressable
+                            accessibilityRole="button"
+                            disabled={isBusy}
+                            onPress={() => void handleBranchAction("merge-ref", b.name)}
+                            style={[
+                              styles.mergeActionPillPrimary,
+                              isBusy ? styles.buttonDisabled : null,
+                            ]}
+                            testID={`changes-merge-into-current-${b.name}`}
+                          >
+                            <Text style={styles.mergeActionPillPrimaryText}>Merge into</Text>
+                          </Pressable>
+                          <Pressable
+                            accessibilityRole="button"
+                            disabled={isBusy}
+                            onPress={() => void handleBranchAction("rebase-onto", b.name)}
+                            style={[
+                              styles.mergeActionPillCyan,
+                              isBusy ? styles.buttonDisabled : null,
+                            ]}
+                            testID={`changes-rebase-onto-${b.name}`}
+                          >
+                            <Text style={styles.mergeActionPillCyanText}>Rebase</Text>
+                          </Pressable>
+                          <Pressable
+                            accessibilityRole="button"
+                            disabled={isBusy}
+                            onPress={() => void handleBranchAction("checkout-ref", b.name)}
+                            style={[styles.stashActionPill, isBusy ? styles.buttonDisabled : null]}
+                            testID={`changes-checkout-branch-${b.name}`}
+                          >
+                            <Text style={styles.stashActionPillText}>Checkout</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+
+                {filteredRemoteBranches.length > 0 ? (
+                  <View style={styles.mergeSectionGroup}>
+                    <Text style={styles.mergeSectionHeader}>
+                      REMOTE BRANCHES ({filteredRemoteBranches.length})
+                    </Text>
+                    {filteredRemoteBranches.map((rb) => (
+                      <View
+                        key={`merge-remote-${rb.name}`}
+                        style={styles.mergeBranchRow}
+                        testID={`changes-merge-remote-row-${rb.name}`}
+                      >
+                        <View style={styles.mergeBranchInfo}>
+                          <GitBranch size={12} color="#06b6d4" />
+                          <Text style={styles.mergeBranchName} numberOfLines={1}>
+                            {rb.name}
+                          </Text>
+                        </View>
+                        <View style={styles.mergeBranchActions}>
+                          <Pressable
+                            accessibilityRole="button"
+                            disabled={isBusy}
+                            onPress={() => void handleBranchAction("merge-ref", rb.name)}
+                            style={[
+                              styles.mergeActionPillPrimary,
+                              isBusy ? styles.buttonDisabled : null,
+                            ]}
+                            testID={`changes-merge-into-current-${rb.name}`}
+                          >
+                            <Text style={styles.mergeActionPillPrimaryText}>Merge into</Text>
+                          </Pressable>
+                          <Pressable
+                            accessibilityRole="button"
+                            disabled={isBusy}
+                            onPress={() => void handleBranchAction("rebase-onto", rb.name)}
+                            style={[
+                              styles.mergeActionPillCyan,
+                              isBusy ? styles.buttonDisabled : null,
+                            ]}
+                            testID={`changes-rebase-onto-${rb.name}`}
+                          >
+                            <Text style={styles.mergeActionPillCyanText}>Rebase</Text>
+                          </Pressable>
+                          <Pressable
+                            accessibilityRole="button"
+                            disabled={isBusy}
+                            onPress={() => void handleBranchAction("checkout-ref", rb.name)}
+                            style={[styles.stashActionPill, isBusy ? styles.buttonDisabled : null]}
+                            testID={`changes-checkout-branch-${rb.name}`}
+                          >
+                            <Text style={styles.stashActionPillText}>Checkout</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+              </>
+            )}
+          </ScrollView>
+        </View>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function ChangesRepositoryToolbar({
   compact,
   model,
@@ -1020,11 +1449,13 @@ function ChangesRepositoryToolbar({
     >
       <ChangesToolbarLeading>
         <BranchSwitcher
+          compact
           currentBranchName={model.branchName}
           serverId={model.serverId}
           workspaceId={model.workspaceId ?? model.cwd}
           workspaceDirectory={model.cwd}
           isGitCheckout
+          onOpenConflictResolver={model.onOpenConflictResolver}
           testID="changes-branch-switcher"
         />
       </ChangesToolbarLeading>
@@ -1035,6 +1466,7 @@ function ChangesRepositoryToolbar({
             <ChangesPullRequestExternalLink compact={compact} model={model.pullRequest} />
           </>
         ) : null}
+        <ChangesMergeMenu model={model} />
         {model.onOpenGitLog ? (
           <Pressable
             testID="changes-open-git-log-button"
@@ -1948,6 +2380,7 @@ export function ChangesSurface({
   const refreshSupported = useSessionStore(
     (s) => s.sessions[serverId]?.serverInfo?.features?.checkoutRefresh === true,
   );
+  const queryClient = useQueryClient();
   const client = useSessionStore((state) => state.sessions[serverId]?.client);
   // COMPAT(fsEntryDuplicate): added in v0.3.0, remove gate after 2027-02-09.
   const fsEntryDuplicateEnabled = useSessionStore(
@@ -2257,6 +2690,47 @@ export function ChangesSurface({
   const [gitLogModalOpen, setGitLogModalOpen] = useState(false);
   const handleOpenGitLog = useCallback(() => setGitLogModalOpen(true), []);
   const handleCloseGitLog = useCallback(() => setGitLogModalOpen(false), []);
+  const [conflictModalState, setConflictModalState] = useState<{
+    open: boolean;
+    conflictFiles: string[];
+    inProgress: "merge" | "rebase" | "cherry-pick" | "conflict" | null;
+  }>({
+    open: false,
+    conflictFiles: [],
+    inProgress: null,
+  });
+  const handleOpenConflictResolver = useCallback(
+    (
+      conflictFiles?: string[],
+      inProgress?: "merge" | "rebase" | "cherry-pick" | "conflict" | null,
+    ) => {
+      if (conflictFiles && conflictFiles.length > 0) {
+        setConflictModalState({
+          open: true,
+          conflictFiles,
+          inProgress: inProgress ?? "conflict",
+        });
+        return;
+      }
+      if (!client || !cwd) {
+        setConflictModalState((prev) => ({ ...prev, open: true }));
+        return;
+      }
+      void client
+        .queryGitGraphLog(cwd, { limit: 1 })
+        .then((res) => {
+          setConflictModalState({
+            open: true,
+            conflictFiles: res.conflictState?.conflictFiles ?? [],
+            inProgress: res.conflictState?.inProgress ?? inProgress ?? "conflict",
+          });
+        })
+        .catch(() => {
+          setConflictModalState((prev) => ({ ...prev, open: true }));
+        });
+    },
+    [client, cwd],
+  );
 
   useEffect(() => {
     if (!isWeb || !isGit) {
@@ -2395,6 +2869,7 @@ export function ChangesSurface({
         diffMode,
         gitActions,
         mode: toolbarMode,
+        onOpenConflictResolver: handleOpenConflictResolver,
         onOpenGitLog: handleOpenGitLog,
         onOpenPullRequest: handleOpenPullRequest,
         onSelectBase: handleSelectBase,
@@ -2410,6 +2885,7 @@ export function ChangesSurface({
       cwd,
       diffMode,
       gitActions,
+      handleOpenConflictResolver,
       handleOpenGitLog,
       handleOpenPullRequest,
       handleSelectBase,
@@ -2483,13 +2959,27 @@ export function ChangesSurface({
       />
 
       {isGit ? (
-        <PyCharmGitModal
-          visible={gitLogModalOpen}
-          onClose={handleCloseGitLog}
-          serverId={serverId}
-          cwd={cwd}
-          onOpenCommitTab={handleCommitPress}
-        />
+        <>
+          <PyCharmGitModal
+            visible={gitLogModalOpen}
+            onClose={handleCloseGitLog}
+            serverId={serverId}
+            cwd={cwd}
+            onOpenCommitTab={handleCommitPress}
+          />
+          <MergeConflictResolverModal
+            visible={conflictModalState.open}
+            onClose={() => setConflictModalState((prev) => ({ ...prev, open: false }))}
+            serverId={serverId}
+            cwd={cwd}
+            conflictFiles={conflictModalState.conflictFiles}
+            inProgressOperation={conflictModalState.inProgress}
+            onResolved={() => {
+              void invalidateCheckoutGitQueriesForClient(queryClient, { serverId, cwd });
+              setConflictModalState((prev) => ({ ...prev, open: false }));
+            }}
+          />
+        </>
       ) : null}
     </View>
   );
@@ -2510,7 +3000,7 @@ function resolveDocumentFocusRequest(
 
 function shouldRenderCommitComposer(
   isGit: boolean,
-  diffMode: WorkingDiffMode,
+  diffMode: string,
   hasChanges: boolean,
 ): boolean {
   return isGit && diffMode === "uncommitted" && hasChanges;
@@ -2555,14 +3045,66 @@ function ChangesCommitComposer({
   const [amend, setAmend] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isStaging, setIsStaging] = useState(false);
+  const [inputHeight, setInputHeight] = useState(52);
+  const [isDraggingInput, setIsDraggingInput] = useState(false);
+  const dragStartYRef = useRef(0);
+  const dragStartHeightRef = useRef(52);
   const toast = useToast();
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
   const commit = useCheckoutGitActionsStore((state) => state.commit);
   const stageChanges = useCheckoutGitActionsStore((state) => state.stageChanges);
   const unstageChanges = useCheckoutGitActionsStore((state) => state.unstageChanges);
   const isCommitting =
-    useCheckoutGitActionsStore((state) => state.getStatus({ serverId, cwd, actionId: "commit" })) ===
-    "pending";
+    useCheckoutGitActionsStore((state) =>
+      state.getStatus({ serverId, cwd, actionId: "commit" }),
+    ) === "pending";
+
+  const clampCommitInputHeight = useCallback(
+    (value: number) => Math.max(34, Math.min(240, Math.round(value))),
+    [],
+  );
+
+  const handleWebResizeMouseDown = useCallback(
+    (event: { preventDefault?: () => void; clientY?: number }) => {
+      if (!isWeb) return;
+      event.preventDefault?.();
+      const startY = event.clientY ?? 0;
+      dragStartYRef.current = startY;
+      dragStartHeightRef.current = inputHeight;
+      setIsDraggingInput(true);
+
+      const handleMouseMove = (moveEvent: MouseEvent) => {
+        const deltaY = moveEvent.clientY - dragStartYRef.current;
+        setInputHeight(clampCommitInputHeight(dragStartHeightRef.current + deltaY));
+      };
+      const handleMouseUp = () => {
+        setIsDraggingInput(false);
+        window.removeEventListener("mousemove", handleMouseMove);
+        window.removeEventListener("mouseup", handleMouseUp);
+      };
+      window.addEventListener("mousemove", handleMouseMove);
+      window.addEventListener("mouseup", handleMouseUp);
+    },
+    [clampCommitInputHeight, inputHeight],
+  );
+
+  const inputPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => !isWeb,
+        onMoveShouldSetPanResponder: (_, gestureState) => !isWeb && Math.abs(gestureState.dy) > 2,
+        onPanResponderGrant: () => {
+          dragStartHeightRef.current = inputHeight;
+          setIsDraggingInput(true);
+        },
+        onPanResponderMove: (_, gestureState) => {
+          setInputHeight(clampCommitInputHeight(dragStartHeightRef.current + gestureState.dy));
+        },
+        onPanResponderRelease: () => setIsDraggingInput(false),
+        onPanResponderTerminate: () => setIsDraggingInput(false),
+      }),
+    [clampCommitInputHeight, inputHeight],
+  );
 
   const stagedCount = useMemo(() => files.filter((file) => file.staged).length, [files]);
   const unstagedCount = useMemo(
@@ -2641,25 +3183,44 @@ function ChangesCommitComposer({
         return;
       }
       const targetFilesCount = stagedCount > 0 ? stagedCount : checkedCount;
-      if (pushAfterCommit || amend) {
-        const confirmed = await confirmDialog({
-          title: pushAfterCommit
-            ? amend
-              ? "Amend Commit & Push"
-              : "Commit & Push to Remote"
-            : "Amend Previous Commit",
-          message: pushAfterCommit
-            ? `Commit ${targetFilesCount} file(s)${amend ? " (amending HEAD)" : ""} and push immediately to the remote branch?`
-            : `Rewrite the latest commit (HEAD) with ${targetFilesCount} selected file(s)?`,
-          confirmLabel: pushAfterCommit ? "Commit & Push" : "Amend Commit",
-          cancelLabel: "Cancel",
-          destructive: amend,
-        });
-        if (!confirmed) {
-          return;
-        }
-      }
       const trimmedMessage = commitMessage.trim();
+      const messagePreview = trimmedMessage
+        ? `\n\nCommit message:\n"${trimmedMessage.length > 140 ? `${trimmedMessage.slice(0, 140)}...` : trimmedMessage}"`
+        : "\n\nCommit message: ✨ Auto-generated by AI based on your diff.";
+      const confirmed = await confirmDialog({
+        title: pushAfterCommit
+          ? amend
+            ? "Amend Commit & Push?"
+            : "Commit & Push to Remote?"
+          : amend
+            ? "Amend Previous Commit (HEAD)?"
+            : `Commit ${targetFilesCount} File(s)?`,
+        message: `${
+          pushAfterCommit
+            ? `Commit ${targetFilesCount} file(s)${amend ? " (amending HEAD)" : ""} and push immediately to the remote branch?`
+            : amend
+              ? `Rewrite the latest commit (HEAD) with ${targetFilesCount} selected file(s)?`
+              : `Create a new commit with ${targetFilesCount} selected file(s)?`
+        }${messagePreview}`,
+        confirmLabel: pushAfterCommit
+          ? amend
+            ? "Amend & Push"
+            : "Commit & Push"
+          : amend
+            ? "Amend Commit"
+            : "Commit",
+        cancelLabel: "Cancel",
+        destructive: amend,
+        badges: [
+          { label: `${targetFilesCount} file(s)`, tone: "emerald" },
+          ...(amend ? [{ label: "Amend HEAD", tone: "amber" as const }] : []),
+          ...(pushAfterCommit ? [{ label: "Push to Remote", tone: "cyan" as const }] : []),
+          ...(!trimmedMessage ? [{ label: "✨ AI Commit Message", tone: "blue" as const }] : []),
+        ],
+      });
+      if (!confirmed) {
+        return;
+      }
       try {
         let shouldAddAll = stagedCount === 0;
         if (stagedCount === 0 && checkedPaths && checkedPaths.size < files.length) {
@@ -2682,10 +3243,9 @@ function ChangesCommitComposer({
         });
         setCommitMessage("");
         setAmend(false);
-        toast.show(
-          pushAfterCommit ? "Committed & pushed successfully" : "Committed changes",
-          { variant: "success" },
-        );
+        toast.show(pushAfterCommit ? "Committed & pushed successfully" : "Committed changes", {
+          variant: "success",
+        });
       } catch (cause) {
         toast.error(resolveErrorMessage(cause, "Failed to commit changes"));
       }
@@ -2732,12 +3292,14 @@ function ChangesCommitComposer({
     <View style={styles.commitComposer} testID="changes-commit-composer">
       <View style={styles.commitInputRow}>
         <EditingTextInput
-          value={commitMessage}
+          initialValue={commitMessage}
           onChangeText={setCommitMessage}
           placeholder="Commit message (leave empty to auto-generate)..."
           placeholderTextColor="#888"
           editable={!commitDisabled}
-          style={styles.commitInput}
+          multiline
+          textAlignVertical="top"
+          style={[styles.commitInput, { height: inputHeight }]}
           testID="changes-commit-message-input"
         />
         <Tooltip delayDuration={300} enabledOnDesktop enabledOnMobile={false}>
@@ -2761,6 +3323,23 @@ function ChangesCommitComposer({
           </TooltipContent>
         </Tooltip>
       </View>
+      <View
+        {...inputPanResponder.panHandlers}
+        // @ts-expect-error web mouse event
+        onMouseDown={isWeb ? handleWebResizeMouseDown : undefined}
+        style={[
+          styles.commitInputResizeHandle,
+          isDraggingInput ? styles.commitInputResizeHandleActive : null,
+        ]}
+        testID="changes-commit-input-resize-handle"
+      >
+        <View
+          style={[
+            styles.commitInputResizePill,
+            isDraggingInput ? styles.commitInputResizePillActive : null,
+          ]}
+        />
+      </View>
       <View style={styles.commitActionsRow}>
         <View style={styles.stageControlsGroup}>
           <Text style={styles.stageSummaryText}>
@@ -2776,10 +3355,7 @@ function ChangesCommitComposer({
             testID="changes-amend-checkbox"
           >
             <Text
-              style={[
-                styles.stageActionPillText,
-                amend ? styles.stageActionPillTextActive : null,
-              ]}
+              style={[styles.stageActionPillText, amend ? styles.stageActionPillTextActive : null]}
             >
               {amend ? "✓ Amend" : "Amend"}
             </Text>
@@ -2876,20 +3452,42 @@ const styles = StyleSheet.create((theme) => ({
   },
   commitInputRow: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     gap: theme.spacing[2],
   },
   commitInput: {
     flex: 1,
     minWidth: 0,
-    height: 28,
+    minHeight: 34,
     paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
     borderRadius: theme.borderRadius.md,
     borderWidth: theme.borderWidth[1],
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface1,
     color: theme.colors.foreground,
     fontSize: theme.fontSize.sm,
+  },
+  commitInputResizeHandle: {
+    height: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    marginVertical: -2,
+    ...(isWeb ? ({ cursor: "ns-resize", userSelect: "none" } as object) : {}),
+  },
+  commitInputResizeHandleActive: {
+    backgroundColor: "rgba(16, 185, 129, 0.14)",
+    borderRadius: 4,
+  },
+  commitInputResizePill: {
+    width: 34,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: theme.colors.border,
+  },
+  commitInputResizePillActive: {
+    backgroundColor: "#10b981",
+    width: 52,
   },
   aiGenerateButton: {
     height: 28,
@@ -3159,5 +3757,187 @@ const styles = StyleSheet.create((theme) => ({
   tooltipText: {
     fontSize: theme.fontSize.sm,
     color: theme.colors.foreground,
+  },
+  mergeToolbarTriggerNormal: {
+    borderWidth: 1,
+    borderColor: "rgba(16, 185, 129, 0.45)",
+    backgroundColor: "rgba(16, 185, 129, 0.1)",
+    paddingHorizontal: theme.spacing[2],
+    borderRadius: theme.borderRadius.md,
+  },
+  mergeToolbarTriggerConflict: {
+    borderWidth: 1,
+    borderColor: "rgba(245, 158, 11, 0.55)",
+    backgroundColor: "rgba(245, 158, 11, 0.14)",
+    paddingHorizontal: theme.spacing[2],
+    borderRadius: theme.borderRadius.md,
+  },
+  mergeMenuContent: {
+    minWidth: 320,
+    maxWidth: 400,
+    padding: theme.spacing[2],
+    gap: theme.spacing[2],
+  },
+  mergeMenuHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: theme.spacing[2],
+    paddingHorizontal: theme.spacing[1],
+  },
+  mergeMenuHeaderTitle: {
+    flex: 1,
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.foregroundMuted,
+  },
+  mergeMenuCurrentBranchHighlight: {
+    color: "#10b981",
+    fontWeight: theme.fontWeight.semibold,
+  },
+  mergeMenuAutoStashBadge: {
+    fontSize: 10,
+    color: "#06b6d4",
+    fontWeight: theme.fontWeight.semibold,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: theme.borderRadius.sm,
+    borderWidth: 1,
+    borderColor: "rgba(6, 182, 212, 0.35)",
+    backgroundColor: "rgba(6, 182, 212, 0.12)",
+  },
+  mergeConflictCalloutBox: {
+    padding: theme.spacing[2],
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: "rgba(245, 158, 11, 0.45)",
+    backgroundColor: "rgba(245, 158, 11, 0.12)",
+    gap: theme.spacing[1],
+  },
+  mergeConflictCalloutHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  mergeConflictCalloutTitle: {
+    flex: 1,
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.semibold,
+    color: "#f59e0b",
+  },
+  mergeConflictCalloutActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flexWrap: "wrap",
+  },
+  mergeResolvePrimaryBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: theme.borderRadius.sm,
+    backgroundColor: "#f59e0b",
+  },
+  mergeResolvePrimaryBtnText: {
+    fontSize: 11,
+    fontWeight: theme.fontWeight.semibold,
+    color: "#0f172a",
+  },
+  mergeContinuePill: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: theme.borderRadius.sm,
+    borderWidth: 1,
+    borderColor: "#10b981",
+    backgroundColor: "rgba(16, 185, 129, 0.14)",
+  },
+  mergeContinuePillText: {
+    fontSize: 11,
+    fontWeight: theme.fontWeight.semibold,
+    color: "#10b981",
+  },
+  mergeAbortPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: theme.borderRadius.sm,
+    borderWidth: 1,
+    borderColor: "#f43f5e",
+    backgroundColor: "rgba(244, 63, 94, 0.14)",
+  },
+  mergeAbortPillText: {
+    fontSize: 11,
+    fontWeight: theme.fontWeight.semibold,
+    color: "#f43f5e",
+  },
+  mergeBranchesScroll: {
+    maxHeight: 300,
+  },
+  mergeSectionGroup: {
+    gap: 2,
+    marginBottom: theme.spacing[1],
+  },
+  mergeSectionHeader: {
+    fontSize: 10,
+    fontWeight: theme.fontWeight.semibold,
+    color: theme.colors.foregroundMuted,
+    paddingHorizontal: theme.spacing[1],
+    paddingVertical: 2,
+  },
+  mergeBranchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: theme.spacing[2],
+    paddingVertical: 5,
+    paddingHorizontal: theme.spacing[1],
+    borderRadius: theme.borderRadius.sm,
+  },
+  mergeBranchInfo: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  mergeBranchName: {
+    flexShrink: 1,
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.foreground,
+    fontWeight: theme.fontWeight.medium,
+  },
+  mergeBranchAheadBehind: {
+    fontSize: 10,
+    color: theme.colors.foregroundMuted,
+    flexShrink: 0,
+  },
+  mergeBranchActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    flexShrink: 0,
+  },
+  mergeActionPillPrimary: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: theme.borderRadius.sm,
+    borderWidth: 1,
+    borderColor: "#10b981",
+    backgroundColor: "rgba(16, 185, 129, 0.15)",
+  },
+  mergeActionPillPrimaryText: {
+    fontSize: 11,
+    fontWeight: theme.fontWeight.semibold,
+    color: "#10b981",
+  },
+  mergeActionPillCyan: {
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: theme.borderRadius.sm,
+    borderWidth: 1,
+    borderColor: "#06b6d4",
+    backgroundColor: "rgba(6, 182, 212, 0.14)",
+  },
+  mergeActionPillCyanText: {
+    fontSize: 11,
+    fontWeight: theme.fontWeight.medium,
+    color: "#06b6d4",
   },
 }));

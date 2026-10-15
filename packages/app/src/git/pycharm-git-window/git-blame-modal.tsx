@@ -96,9 +96,7 @@ export function GitBlameModal({
     setErrorMsg(null);
     try {
       const response = await client.getGitBlame(cwd, resolvedFilePath);
-      const blameLines = Array.isArray(response)
-        ? response
-        : (response?.blameLines ?? []);
+      const blameLines = Array.isArray(response) ? response : (response?.blameLines ?? []);
       setLines(blameLines);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "Failed to load git blame");
@@ -123,7 +121,7 @@ export function GitBlameModal({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [ isVisible, onClose]);
+  }, [isVisible, onClose]);
 
   const hoveredCommitSummary = useMemo(() => {
     if (!hoveredSha) return null;
@@ -159,11 +157,7 @@ export function GitBlameModal({
                 <Text style={styles.actionBtnText}>File History</Text>
               </Pressable>
             ) : null}
-            <Pressable
-              style={styles.actionBtn}
-              onPress={() => void loadBlame()}
-              disabled={loading}
-            >
+            <Pressable style={styles.actionBtn} onPress={() => void loadBlame()} disabled={loading}>
               <RefreshCw size={13} color={theme.colors.foreground} />
               <Text style={styles.actionBtnText}>Refresh</Text>
             </Pressable>
@@ -178,9 +172,7 @@ export function GitBlameModal({
             <GitCommitHorizontal size={13} color="#10b981" />
             <Text style={styles.tooltipSha}>{hoveredCommitSummary.shortSha}</Text>
             <Text style={styles.tooltipAuthor}>{hoveredCommitSummary.author}</Text>
-            <Text style={styles.tooltipDate}>
-              {formatBlameFullDate(hoveredCommitSummary)}
-            </Text>
+            <Text style={styles.tooltipDate}>{formatBlameFullDate(hoveredCommitSummary)}</Text>
             <Text style={styles.tooltipSummary} numberOfLines={1}>
               {hoveredCommitSummary.summary}
             </Text>
@@ -217,10 +209,7 @@ export function GitBlameModal({
                   ]}
                 >
                   <Pressable
-                    style={[
-                      styles.blameGutter,
-                      { borderLeftColor: accentColor },
-                    ]}
+                    style={[styles.blameGutter, { borderLeftColor: accentColor }]}
                     onHoverIn={() => setHoveredSha(line.sha)}
                     onPress={async () => {
                       setHoveredSha(line.sha);
@@ -316,7 +305,7 @@ const styles = StyleSheet.create((theme) => ({
     maxWidth: 420,
   },
   pathBadgeText: {
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     fontFamily: theme.fontFamily.mono,
     color: "#10b981",
   },
@@ -337,7 +326,7 @@ const styles = StyleSheet.create((theme) => ({
     borderColor: theme.colors.border,
   },
   actionBtnText: {
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     color: theme.colors.foreground,
   },
   closeBtn: {
@@ -354,22 +343,22 @@ const styles = StyleSheet.create((theme) => ({
     borderBottomColor: theme.colors.border,
   },
   tooltipSha: {
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     fontFamily: theme.fontFamily.mono,
     color: "#10b981",
   },
   tooltipAuthor: {
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
     color: theme.colors.foreground,
   },
   tooltipDate: {
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     color: theme.colors.foregroundMuted,
   },
   tooltipSummary: {
     flex: 1,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     color: theme.colors.foreground,
   },
   scrollArea: {

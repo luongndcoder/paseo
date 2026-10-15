@@ -18,10 +18,7 @@ import {
   type PressableStateCallbackType,
 } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
-import {
-  pluginScreensHostKey,
-  rememberPluginContributionHost,
-} from "@/plugins/contribution-host";
+import { pluginScreensHostKey, rememberPluginContributionHost } from "@/plugins/contribution-host";
 import { useInstalledPlugin, usePluginInstallations } from "@/plugins/registry";
 import { buildPluginSurfaceRoute } from "@/plugins/routes";
 import { builtinSidebarNavLabelKey } from "@/sidebar-nav/model";
@@ -83,7 +80,7 @@ function useZeroSubPlugin() {
 function toneFromUsedPercent(usedPercent: number): UsageTone {
   if (usedPercent >= 90) return "danger";
   if (usedPercent >= 75) return "warning";
-  return "normal";
+  return "default";
 }
 
 function resolveZeroSubPinnedUsage(

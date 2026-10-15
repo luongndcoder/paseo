@@ -31,6 +31,7 @@ import { type WorktreeArchiveWarningLabels } from "@/git/worktree-archive-warnin
 import { useWorkspaceArchive } from "@/workspace/use-workspace-archive";
 import { resolveWorkspaceMapKeyByIdentity } from "@/utils/workspace-identity";
 import { readValidatedString } from "@/storage/validated-storage";
+import { confirmCommitDialog, confirmDialog } from "@/utils/confirm-dialog";
 
 export type { GitActionId, GitAction, GitActions } from "@/git/policy";
 
@@ -503,48 +504,158 @@ export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): Use
 
   // Handlers
   const handleCommit = useCallback(() => {
-    void runCommit({ serverId, cwd })
-      .then(() => {
-        toastActionSuccess(t("workspace.git.actions.commit.success"));
-        return;
-      })
-      .catch((err) => {
-        toastActionError(err, t("workspace.git.actions.toasts.failedCommit"));
+    void (async () => {
+      const activeBranch = currentBranchName ?? branchLabel;
+      const result = await confirmCommitDialog({
+        title: `Commit Changes on '${activeBranch}'`,
+        branchName: activeBranch,
+        diffStat: null,
+        confirmLabel: "Commit Changes",
       });
-  }, [cwd, runCommit, serverId, t, toastActionError, toastActionSuccess]);
+      if (!result.confirmed) {
+        return;
+      }
+      try {
+        await runCommit({
+          serverId,
+          cwd,
+          message: result.message || undefined,
+          amend: result.amend,
+          push: result.push,
+        });
+        toastActionSuccess(t("workspace.git.actions.commit.success"));
+      } catch (err) {
+        toastActionError(err, t("workspace.git.actions.toasts.failedCommit"));
+      }
+    })();
+  }, [
+    branchLabel,
+    currentBranchName,
+    cwd,
+    runCommit,
+    serverId,
+    t,
+    toastActionError,
+    toastActionSuccess,
+  ]);
 
   const handlePull = useCallback(() => {
-    void runPull({ serverId, cwd })
-      .then(() => {
-        toastActionSuccess(t("workspace.git.actions.pull.success"));
-        return;
-      })
-      .catch((err) => {
-        toastActionError(err, t("workspace.git.actions.toasts.failedPull"));
+    void (async () => {
+      const activeBranch = currentBranchName ?? branchLabel;
+      const ok = await confirmDialog({
+        title: `Pull Remote Changes into '${activeBranch}'?`,
+        message: `Fetch and integrate the latest commits from remote into your local branch '${activeBranch}'.`,
+        confirmLabel: "Pull Changes",
+        branchFlow: {
+          from: `origin/${activeBranch}`,
+          to: activeBranch,
+          actionLabel: "GIT PULL",
+        },
+        badges: [{ label: "Remote Sync", tone: "cyan" }],
       });
-  }, [cwd, runPull, serverId, t, toastActionError, toastActionSuccess]);
+      if (!ok) return;
+      try {
+        await runPull({ serverId, cwd });
+        toastActionSuccess(t("workspace.git.actions.pull.success"));
+      } catch (err) {
+        toastActionError(err, t("workspace.git.actions.toasts.failedPull"));
+      }
+    })();
+  }, [
+    branchLabel,
+    currentBranchName,
+    cwd,
+    runPull,
+    serverId,
+    t,
+    toastActionError,
+    toastActionSuccess,
+  ]);
 
   const handlePush = useCallback(() => {
-    void runPush({ serverId, cwd })
-      .then(() => {
-        toastActionSuccess(t("workspace.git.actions.push.success"));
-        return;
-      })
-      .catch((err) => {
-        toastActionError(err, t("workspace.git.actions.toasts.failedPush"));
+    void (async () => {
+      const activeBranch = currentBranchName ?? branchLabel;
+      const aheadCount = gitStatus?.aheadOfOrigin ?? gitStatus?.aheadBehind?.ahead ?? 0;
+      const ok = await confirmDialog({
+        title: `Push '${activeBranch}' to Remote?`,
+        message: `Push your local commits on '${activeBranch}' to the remote repository.`,
+        confirmLabel: "Push Commits",
+        branchFlow: {
+          from: activeBranch,
+          to: `origin/${activeBranch}`,
+          actionLabel: "GIT PUSH",
+        },
+        badges: [
+          ...(aheadCount > 0
+            ? [{ label: `↑ ${aheadCount} commit(s) ahead`, tone: "emerald" as const }]
+            : []),
+          { label: "Remote Sync", tone: "cyan" },
+        ],
       });
-  }, [cwd, runPush, serverId, t, toastActionError, toastActionSuccess]);
+      if (!ok) return;
+      try {
+        await runPush({ serverId, cwd });
+        toastActionSuccess(t("workspace.git.actions.push.success"));
+      } catch (err) {
+        toastActionError(err, t("workspace.git.actions.toasts.failedPush"));
+      }
+    })();
+  }, [
+    branchLabel,
+    currentBranchName,
+    cwd,
+    gitStatus?.aheadBehind?.ahead,
+    gitStatus?.aheadOfOrigin,
+    runPush,
+    serverId,
+    t,
+    toastActionError,
+    toastActionSuccess,
+  ]);
 
   const handlePullAndPush = useCallback(() => {
-    void runPullAndPush({ serverId, cwd })
-      .then(() => {
-        toastActionSuccess(t("workspace.git.actions.pullAndPush.success"));
-        return;
-      })
-      .catch((err) => {
-        toastActionError(err, t("workspace.git.actions.toasts.failedPullAndPush"));
+    void (async () => {
+      const activeBranch = currentBranchName ?? branchLabel;
+      const aheadCount = gitStatus?.aheadOfOrigin ?? gitStatus?.aheadBehind?.ahead ?? 0;
+      const behindCount = gitStatus?.behindOfOrigin ?? gitStatus?.aheadBehind?.behind ?? 0;
+      const ok = await confirmDialog({
+        title: `Sync (Pull & Push) '${activeBranch}'?`,
+        message: `First pull the latest changes from remote into '${activeBranch}', then push your local commits to remote.`,
+        confirmLabel: "Pull & Push",
+        branchFlow: {
+          from: activeBranch,
+          to: `origin/${activeBranch}`,
+          actionLabel: "PULL & PUSH",
+        },
+        badges: [
+          ...(behindCount > 0
+            ? [{ label: `↓ ${behindCount} behind`, tone: "amber" as const }]
+            : []),
+          ...(aheadCount > 0 ? [{ label: `↑ ${aheadCount} ahead`, tone: "emerald" as const }] : []),
+        ],
       });
-  }, [cwd, runPullAndPush, serverId, t, toastActionError, toastActionSuccess]);
+      if (!ok) return;
+      try {
+        await runPullAndPush({ serverId, cwd });
+        toastActionSuccess(t("workspace.git.actions.pullAndPush.success"));
+      } catch (err) {
+        toastActionError(err, t("workspace.git.actions.toasts.failedPullAndPush"));
+      }
+    })();
+  }, [
+    branchLabel,
+    currentBranchName,
+    cwd,
+    gitStatus?.aheadBehind?.ahead,
+    gitStatus?.aheadBehind?.behind,
+    gitStatus?.aheadOfOrigin,
+    gitStatus?.behindOfOrigin,
+    runPullAndPush,
+    serverId,
+    t,
+    toastActionError,
+    toastActionSuccess,
+  ]);
 
   const handleCreatePr = useCallback(() => {
     void persistShipDefault("pr");
@@ -569,18 +680,44 @@ export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): Use
 
   const handleMergePr = useCallback(
     (method: CheckoutPrMergeMethod) => {
-      void persistShipDefault("pr");
-      void runMergePr({ serverId, cwd, method })
-        .then(() => {
+      void (async () => {
+        const activeBranch = currentBranchName ?? branchLabel;
+        const targetBase = baseRefLabel || "base";
+        const ok = await confirmDialog({
+          title: `Merge Pull Request (${method.toUpperCase()})?`,
+          message: `Merge the open pull request for '${activeBranch}' into '${targetBase}' using '${method}' strategy.`,
+          confirmLabel: `Merge PR (${method})`,
+          branchFlow: {
+            from: activeBranch,
+            to: targetBase,
+            actionLabel: `PR ${method.toUpperCase()}`,
+          },
+          badges: [{ label: `Method: ${method.toUpperCase()}`, tone: "emerald" }],
+        });
+        if (!ok) return;
+        void persistShipDefault("pr");
+        try {
+          await runMergePr({ serverId, cwd, method });
           setPostShipArchiveSuggested(true);
           toastActionSuccess(t("workspace.git.actions.mergePr.success", forgeVocabulary(forge)));
-          return;
-        })
-        .catch((err) => {
+        } catch (err) {
           toastActionError(err, t("workspace.git.actions.toasts.failedMergePr"));
-        });
+        }
+      })();
     },
-    [cwd, forge, persistShipDefault, runMergePr, serverId, t, toastActionError, toastActionSuccess],
+    [
+      baseRefLabel,
+      branchLabel,
+      currentBranchName,
+      cwd,
+      forge,
+      persistShipDefault,
+      runMergePr,
+      serverId,
+      t,
+      toastActionError,
+      toastActionSuccess,
+    ],
   );
 
   const handleEnablePrAutoMerge = useCallback(
@@ -622,18 +759,34 @@ export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): Use
       toast.error(t("workspace.git.actions.toasts.baseRefUnavailable"));
       return;
     }
-    void persistShipDefault("merge");
-    void runMergeBranch({ serverId, cwd, baseRef })
-      .then(() => {
+    void (async () => {
+      const activeBranch = currentBranchName ?? branchLabel;
+      const ok = await confirmDialog({
+        title: `Merge '${activeBranch}' into '${baseRefLabel}'?`,
+        message: `Merge all commits from your current branch '${activeBranch}' into base branch '${baseRefLabel}'.`,
+        confirmLabel: `Merge into ${baseRefLabel}`,
+        branchFlow: {
+          from: activeBranch,
+          to: baseRefLabel,
+          actionLabel: "MERGE INTO BASE",
+        },
+        badges: [{ label: "Local Base Merge", tone: "emerald" }],
+      });
+      if (!ok) return;
+      void persistShipDefault("merge");
+      try {
+        await runMergeBranch({ serverId, cwd, baseRef });
         setPostShipArchiveSuggested(true);
         toastActionSuccess(t("workspace.git.actions.mergeBranch.success"));
-        return;
-      })
-      .catch((err) => {
+      } catch (err) {
         toastActionError(err, t("workspace.git.actions.toasts.failedMerge"));
-      });
+      }
+    })();
   }, [
     baseRef,
+    baseRefLabel,
+    branchLabel,
+    currentBranchName,
     cwd,
     persistShipDefault,
     runMergeBranch,
@@ -649,15 +802,40 @@ export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): Use
       toast.error(t("workspace.git.actions.toasts.baseRefUnavailable"));
       return;
     }
-    void runMergeFromBase({ serverId, cwd, baseRef })
-      .then(() => {
-        toastActionSuccess(t("workspace.git.actions.mergeFromBase.success"));
-        return;
-      })
-      .catch((err) => {
-        toastActionError(err, t("workspace.git.actions.toasts.failedMergeFromBase"));
+    void (async () => {
+      const activeBranch = currentBranchName ?? branchLabel;
+      const ok = await confirmDialog({
+        title: `Update '${activeBranch}' from '${baseRefLabel}'?`,
+        message: `Merge the latest changes from base branch '${baseRefLabel}' (${baseRef}) into your current branch '${activeBranch}'.`,
+        confirmLabel: `Update from ${baseRefLabel}`,
+        branchFlow: {
+          from: baseRefLabel,
+          to: activeBranch,
+          actionLabel: "UPDATE FROM BASE",
+        },
+        badges: [{ label: "Sync Base → Current", tone: "cyan" }],
       });
-  }, [baseRef, cwd, runMergeFromBase, serverId, t, toast, toastActionError, toastActionSuccess]);
+      if (!ok) return;
+      try {
+        await runMergeFromBase({ serverId, cwd, baseRef });
+        toastActionSuccess(t("workspace.git.actions.mergeFromBase.success"));
+      } catch (err) {
+        toastActionError(err, t("workspace.git.actions.toasts.failedMergeFromBase"));
+      }
+    })();
+  }, [
+    baseRef,
+    baseRefLabel,
+    branchLabel,
+    currentBranchName,
+    cwd,
+    runMergeFromBase,
+    serverId,
+    t,
+    toast,
+    toastActionError,
+    toastActionSuccess,
+  ]);
 
   const archiveController = useWorkspaceScreenArchiveController({
     serverId,

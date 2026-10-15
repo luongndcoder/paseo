@@ -448,7 +448,7 @@ function useFilePaneBarActions(input: {
     onCopyPath: resolvedFilePaths || normalizedFilePath ? handleCopyPath : undefined,
     onRevealInFileManager:
       fileManagerTarget && resolvedFilePaths ? handleRevealInFileManager : undefined,
-    revealTargetName: fileManagerTarget?.name,
+    revealTargetName: fileManagerTarget?.label,
   };
 }
 
