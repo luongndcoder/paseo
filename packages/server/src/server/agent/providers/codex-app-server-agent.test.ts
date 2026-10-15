@@ -5031,7 +5031,7 @@ describe("Codex app-server provider", () => {
     }
   });
 
-  test("does not register a parent interaction on a child thread as another sub-agent", async () => {
+  test("does not register a parent interaction on a child thread as another sub-agent and settles its tool call status", async () => {
     const appServer = createFakeCodexAppServer();
     const session = new CodexAppServerAgentSession(
       createConfig({ cwd: "/workspace/project" }),
@@ -5040,9 +5040,19 @@ describe("Codex app-server provider", () => {
       async () => appServer.child,
     );
     const providerSubagentIds = new Set<string>();
+    const childToolCallStatuses: string[] = [];
     session.subscribe((event) => {
       if (event.type === "provider_subagent" && event.event.type === "upsert") {
         providerSubagentIds.add(event.event.id);
+      }
+      if (
+        event.type === "provider_subagent" &&
+        event.event.type === "timeline" &&
+        event.event.id === "child-thread" &&
+        event.event.item.type === "tool_call" &&
+        event.event.item.callId === "parent-interacted"
+      ) {
+        childToolCallStatuses.push(event.event.item.status);
       }
     });
 
@@ -5064,10 +5074,66 @@ describe("Codex app-server provider", () => {
         kind: "interacted",
         agentPath: "/root",
       });
+      appServer.completesSubAgentActivity({
+        callId: "parent-interacted",
+        threadId: "thread-1",
+        parentThreadId: "child-thread",
+        kind: "interacted",
+        agentPath: "/root",
+      });
       appServer.completeTurn();
       await resultPromise;
 
       expect(providerSubagentIds).toEqual(new Set(["child-thread"]));
+      expect(childToolCallStatuses).toEqual(["running", "completed"]);
+      appServer.assertNoErrors();
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("marks registered sub-agent tool call completed when subAgentActivity kind is completed", async () => {
+    const appServer = createFakeCodexAppServer();
+    const session = new CodexAppServerAgentSession(
+      createConfig({ cwd: "/workspace/project" }),
+      null,
+      createTestLogger(),
+      async () => appServer.child,
+    );
+    const subAgentStatuses: string[] = [];
+    session.subscribe((event) => {
+      if (
+        event.type === "timeline" &&
+        event.item.type === "tool_call" &&
+        event.item.callId === "child-started"
+      ) {
+        subAgentStatuses.push(event.item.status);
+      }
+    });
+
+    try {
+      const resultPromise = session.run("Delegate the investigation.");
+      await appServer.waitForTurnStart();
+
+      const child = waitForProviderSubagent(session, "child-thread");
+      appServer.startsSubAgent({
+        callId: "child-started",
+        threadId: "child-thread",
+        agentPath: "/root/child",
+      });
+      await child;
+      appServer.completesSubAgentActivity({
+        callId: "subagent-completed-child-thread",
+        threadId: "child-thread",
+        parentThreadId: "thread-1",
+        kind: "completed" as unknown as "started",
+        agentPath: "/root/child",
+      });
+      appServer.completeTurn();
+      await resultPromise;
+
+      expect(subAgentStatuses).toContain("completed");
+      expect(subAgentStatuses.at(-1)).toBe("completed");
       appServer.assertNoErrors();
     } finally {
       await session.close();

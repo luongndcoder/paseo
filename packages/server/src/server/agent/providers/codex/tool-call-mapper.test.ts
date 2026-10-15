@@ -246,6 +246,7 @@ describe("codex tool-call mapper", () => {
     ["started", "running"],
     ["interacted", "running"],
     ["interrupted", "canceled"],
+    ["completed", "completed"],
   ] as const)("maps subAgentActivity %s into canonical sub-agent detail", (kind, status) => {
     const item = mapCodexToolCallFromThreadItem({
       type: "subAgentActivity",

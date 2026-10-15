@@ -1824,7 +1824,7 @@ function readCodexTurnHistoryTimestamp(
 interface CodexSubAgentActivity {
   id: string | null;
   agentThreadId: string;
-  kind: "started" | "interacted" | "interrupted";
+  kind: "started" | "interacted" | "interrupted" | "completed";
 }
 
 function isTerminalSubAgentStatus(
@@ -1844,7 +1844,10 @@ function readCodexSubAgentActivity(item: unknown): CodexSubAgentActivity | null 
   if (
     normalizedType !== "subAgentActivity" ||
     typeof record.agentThreadId !== "string" ||
-    (record.kind !== "started" && record.kind !== "interacted" && record.kind !== "interrupted")
+    (record.kind !== "started" &&
+      record.kind !== "interacted" &&
+      record.kind !== "interrupted" &&
+      record.kind !== "completed")
   ) {
     return null;
   }
@@ -2120,8 +2123,13 @@ async function loadCodexThreadHistoryTimeline(params: {
         const timestamp =
           readCodexHistoryTimestamp(item) ?? readCodexTurnHistoryTimestamp(turn, timelineItem);
         const settledTimelineItem =
-          historicalSubAgentActivity && timelineItem.type === "tool_call"
-            ? settleHistoricalSubAgentActivity(timelineItem, historicalSubAgentActivity.kind)
+          timelineItem.type === "tool_call" &&
+          (historicalSubAgentActivity !== null ||
+            (timelineItem.detail.type === "sub_agent" && timelineItem.status === "running"))
+            ? settleHistoricalSubAgentActivity(
+                timelineItem,
+                historicalSubAgentActivity?.kind ?? "completed",
+              )
             : timelineItem;
         timeline.push({
           item: settledTimelineItem,
@@ -5720,6 +5728,8 @@ export class CodexAppServerAgentSession implements AgentSession {
     let nextStatus: ToolCallTimelineItem["status"] | undefined = "running";
     if (activity.kind === "interrupted") {
       nextStatus = "canceled";
+    } else if (activity.kind === "completed") {
+      nextStatus = "completed";
     } else if (isTerminalSubAgentStatus(state.toolCall.status)) {
       nextStatus = undefined;
     }
@@ -6127,18 +6137,55 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.emitEvent({ type: "turn_started", provider: CODEX_PROVIDER });
   }
 
+  private settleCompletedSubAgentTurn(
+    subAgentCallId: string,
+    threadId: string | null | undefined,
+    parsedStatus: string | null | undefined,
+  ): void {
+    let status: ToolCallTimelineItem["status"] = "completed";
+    if (parsedStatus === "failed") {
+      status = "failed";
+    } else if (parsedStatus === "interrupted") {
+      status = "canceled";
+    }
+    const state = this.subAgentCallsByCallId.get(subAgentCallId);
+    if (state) {
+      for (const [itemId, childItem] of state.childItems.entries()) {
+        const isOrphanedRunningSubAgentCall =
+          childItem.type === "tool_call" &&
+          childItem.detail.type === "sub_agent" &&
+          childItem.status === "running" &&
+          (this.subAgentCallsByCallId.get(childItem.callId)?.childThreadIds.size ?? 0) === 0;
+        if (!isOrphanedRunningSubAgentCall) {
+          continue;
+        }
+        const settledChildItem: ToolCallTimelineItem =
+          status === "failed"
+            ? {
+                ...childItem,
+                status: "failed",
+                error: childItem.error ?? { message: "Sub-agent failed" },
+              }
+            : {
+                ...childItem,
+                status,
+                error: null,
+              };
+        state.childItems.set(itemId, settledChildItem);
+        if (threadId) {
+          this.emitProviderSubagentTimeline(threadId, settledChildItem);
+        }
+      }
+    }
+    this.emitSubAgentActivityUpdate(subAgentCallId, status);
+  }
+
   private handleTurnCompletedNotification(
     parsed: Extract<ParsedCodexNotification, { kind: "turn_completed" }>,
   ): void {
     const subAgentCallId = this.getSubAgentCallIdForThread(parsed.threadId);
     if (subAgentCallId) {
-      let status: ToolCallTimelineItem["status"] = "completed";
-      if (parsed.status === "failed") {
-        status = "failed";
-      } else if (parsed.status === "interrupted") {
-        status = "canceled";
-      }
-      this.emitSubAgentActivityUpdate(subAgentCallId, status);
+      this.settleCompletedSubAgentTurn(subAgentCallId, parsed.threadId, parsed.status);
       return;
     }
     this.completePendingRootCompactions();
@@ -6539,6 +6586,29 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
   }
 
+  private settleCompletedNonChildSubAgentActivity(
+    timelineItem: AgentTimelineItem,
+    rawItem: unknown,
+    registeredChildThreadIds: string[],
+  ): void {
+    const subAgentActivity = readCodexSubAgentActivity(rawItem);
+    if (
+      timelineItem.type !== "tool_call" ||
+      !subAgentActivity ||
+      registeredChildThreadIds.length > 0 ||
+      (this.subAgentCallsByCallId.get(timelineItem.callId)?.childThreadIds.size ?? 0) > 0
+    ) {
+      return;
+    }
+    const settledItem = settleHistoricalSubAgentActivity(timelineItem, subAgentActivity.kind);
+    timelineItem.status = settledItem.status;
+    timelineItem.error = settledItem.error;
+    const state = this.subAgentCallsByCallId.get(timelineItem.callId);
+    if (state) {
+      state.toolCall = timelineItem;
+    }
+  }
+
   private handleItemCompletedNotification(
     parsed: Extract<ParsedCodexNotification, { kind: "item_completed" }>,
   ): void {
@@ -6574,6 +6644,11 @@ export class CodexAppServerAgentSession implements AgentSession {
             parentSubagentId: resolveCodexParentSubagentId(childSubAgentCallId, parsed.threadId),
           })
         : [];
+    this.settleCompletedNonChildSubAgentActivity(
+      timelineItem,
+      parsed.item,
+      registeredChildThreadIds,
+    );
     const imageItems = mcpToolResultImagesToTimeline(parsed.item);
     if (childSubAgentCallId) {
       this.emitCompletedProviderSubagentItem(parsed, timelineItem);
