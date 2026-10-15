@@ -13,6 +13,10 @@ import {
   initializeOpenAiSpeechServices,
   validateOpenAiCredentialRequirements,
 } from "./providers/openai/runtime.js";
+import {
+  getSonioxSpeechAvailability,
+  initializeSonioxSpeechServices,
+} from "./providers/soniox/runtime.js";
 import type { SpeechToTextProvider, TextToSpeechProvider } from "./speech-provider.js";
 import type { RequestedSpeechProviders } from "./speech-types.js";
 import type { TurnDetectionProvider } from "./turn-detection-provider.js";
@@ -332,6 +336,10 @@ export interface SpeechService {
   resolveDictationSttLanguage: () => string;
   getReadiness: () => SpeechReadinessSnapshot;
   onReadinessChange: (listener: (snapshot: SpeechReadinessSnapshot) => void) => () => void;
+  updateConfig?: (next: {
+    speechConfig?: PaseoSpeechConfig | null;
+    openaiConfig?: PaseoOpenAIConfig;
+  }) => Promise<void>;
   start: () => void;
   stop: () => Promise<void>;
   ready: Promise<void>;
@@ -343,10 +351,10 @@ export function createSpeechService(params: {
   speechConfig?: PaseoSpeechConfig;
 }): SpeechService {
   const logger = params.logger.child({ module: "speech-runtime" });
-  const speechConfig = params.speechConfig ?? null;
-  const openaiConfig = params.openaiConfig;
-  const providers = resolveRequestedSpeechProviders(speechConfig);
-  const requestedProviders = describeRequestedProviders(providers);
+  let speechConfig = params.speechConfig ?? null;
+  let openaiConfig = params.openaiConfig;
+  let providers = resolveRequestedSpeechProviders(speechConfig);
+  let requestedProviders = describeRequestedProviders(providers);
 
   validateOpenAiCredentialRequirements({
     providers,
@@ -359,6 +367,7 @@ export function createSpeechService(params: {
       requestedProviders,
       availability: {
         openai: getOpenAiSpeechAvailability(openaiConfig),
+        soniox: getSonioxSpeechAvailability(speechConfig),
       },
     },
     "Speech provider reconciliation started",
@@ -398,6 +407,11 @@ export function createSpeechService(params: {
   });
 
   const computeReadinessSnapshot = (): SpeechReadinessSnapshot => {
+    const sonioxConfigured = getSonioxSpeechAvailability(speechConfig).configured;
+    const effectiveMissingVietnameseDictationModel =
+      missingVietnameseDictationModel &&
+      !(providers.dictationStt.provider === "soniox" && sonioxConfigured);
+
     const realtimeVoice = buildRealtimeVoiceReadiness({
       providers,
       turnDetectionService,
@@ -407,7 +421,7 @@ export function createSpeechService(params: {
     const dictation = buildDictationReadiness({
       providers,
       dictationSttService,
-      missingVietnameseDictationModel,
+      missingVietnameseDictationModel: effectiveMissingVietnameseDictationModel,
       backgroundDownloadInProgress,
       backgroundDownloadError,
     });
@@ -415,7 +429,7 @@ export function createSpeechService(params: {
       realtimeVoice,
       dictation,
       missingLocalModelIds,
-      missingVietnameseDictationModel,
+      missingVietnameseDictationModel: effectiveMissingVietnameseDictationModel,
       backgroundDownloadInProgress,
       backgroundDownloadError,
     });
@@ -499,14 +513,22 @@ export function createSpeechService(params: {
       speechConfig,
       logger,
     });
+    const nextSonioxSpeech = initializeSonioxSpeechServices({
+      providers,
+      speechConfig,
+      logger,
+      localVoiceSttProvider: nextLocalSpeech.localVoiceSttProvider,
+      localDictationSttProvider: nextLocalSpeech.localDictationSttProvider,
+    });
     const nextOpenAiSpeech = initializeOpenAiSpeechServices({
       providers,
       openaiConfig,
       existing: {
         turnDetectionService: nextLocalSpeech.turnDetectionService,
-        sttService: nextLocalSpeech.sttService,
+        sttService: nextSonioxSpeech.sttService ?? nextLocalSpeech.sttService,
         ttsService: nextLocalSpeech.ttsService,
-        dictationSttService: nextLocalSpeech.dictationSttService,
+        dictationSttService:
+          nextSonioxSpeech.dictationSttService ?? nextLocalSpeech.dictationSttService,
       },
       logger,
     });
@@ -690,7 +712,11 @@ export function createSpeechService(params: {
       try {
         await runReconcile();
         const snapshot = computeReadinessSnapshot();
-        if (snapshot.voiceFeature.enabled && !snapshot.voiceFeature.available) {
+        if (
+          (snapshot.voiceFeature.enabled && !snapshot.voiceFeature.available) ||
+          missingLocalModelIds.length > 0 ||
+          missingVietnameseDictationModel
+        ) {
           if (missingLocalModelIds.length > 0 || missingVietnameseDictationModel) {
             startBackgroundDownload();
           }
@@ -708,6 +734,30 @@ export function createSpeechService(params: {
         logger.error({ err: error }, "Speech runtime failed during initial reconcile");
       }
     })();
+  };
+
+  const updateConfig = async (next: {
+    speechConfig?: PaseoSpeechConfig | null;
+    openaiConfig?: PaseoOpenAIConfig;
+  }): Promise<void> => {
+    if (next.speechConfig !== undefined) {
+      speechConfig = next.speechConfig;
+      providers = resolveRequestedSpeechProviders(speechConfig);
+      requestedProviders = describeRequestedProviders(providers);
+    }
+    if (next.openaiConfig !== undefined) {
+      openaiConfig = next.openaiConfig;
+    }
+    if (started && !stopped) {
+      await runReconcile();
+      if (
+        (missingLocalModelIds.length > 0 || missingVietnameseDictationModel) &&
+        !backgroundDownloadInProgress
+      ) {
+        startBackgroundDownload();
+        scheduleMonitor();
+      }
+    }
   };
 
   const stop = async (): Promise<void> => {
@@ -731,6 +781,7 @@ export function createSpeechService(params: {
     resolveDictationSttLanguage: () => speechConfig?.sttLanguages?.dictation ?? "en",
     getReadiness: () => lastPublishedReadinessSnapshot ?? computeReadinessSnapshot(),
     onReadinessChange: subscribeSpeechReadiness,
+    updateConfig,
     start,
     stop,
     ready,

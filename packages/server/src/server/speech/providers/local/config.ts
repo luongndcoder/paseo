@@ -83,9 +83,11 @@ function shouldIncludeLocalProviderConfig(params: {
 }): boolean {
   const localRequestedByFeature =
     (params.providers.dictationStt.enabled !== false &&
-      params.providers.dictationStt.provider === "local") ||
+      (params.providers.dictationStt.provider === "local" ||
+        params.providers.dictationStt.provider === "soniox")) ||
     (params.providers.voiceStt.enabled !== false &&
-      params.providers.voiceStt.provider === "local") ||
+      (params.providers.voiceStt.provider === "local" ||
+        params.providers.voiceStt.provider === "soniox")) ||
     (params.providers.voiceTts.enabled !== false && params.providers.voiceTts.provider === "local");
 
   return (

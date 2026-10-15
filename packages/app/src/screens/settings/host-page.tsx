@@ -50,6 +50,7 @@ import {
   useHosts,
 } from "@/runtime/host-runtime";
 import { ProvidersSection } from "@/screens/settings/providers-section";
+import { SpeechSttSettingsSection } from "@/screens/settings/speech-stt-section";
 import { HostUsageSection } from "@/usage";
 import { HostAppearanceSection } from "@/screens/settings/host-appearance-section";
 import { SettingsSection } from "@/components/settings/headings/settings-section";
@@ -336,6 +337,7 @@ export function HostProvidersPage({ serverId }: { serverId: string }) {
   return (
     <View>
       <ProvidersSection serverId={serverId} />
+      <SpeechSttSettingsSection serverId={serverId} />
     </View>
   );
 }
@@ -374,6 +376,7 @@ export function HostSettingsPage({
       <HostConnectionError serverId={serverId} />
 
       <HostAppearanceSection host={host} />
+      <SpeechSttSettingsSection serverId={serverId} />
 
       {isLocalDaemon ? <LocalDaemonSection /> : null}
 

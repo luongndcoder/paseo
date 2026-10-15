@@ -129,6 +129,12 @@ import { DownloadTokenStore } from "./file-download/token-store.js";
 import { formatAttachmentContentDisposition } from "./file-download/content-disposition.js";
 import type { OpenAiSpeechProviderConfig } from "./speech/providers/openai/config.js";
 import type { LocalSpeechProviderConfig } from "./speech/providers/local/config.js";
+import {
+  DEFAULT_SONIOX_LANGUAGE_HINTS,
+  DEFAULT_SONIOX_STT_MODEL,
+  DEFAULT_SONIOX_WS_ENDPOINT,
+  type SonioxSpeechProviderConfig,
+} from "./speech/providers/soniox/config.js";
 import type { RequestedSpeechProviders } from "./speech/speech-types.js";
 import { createSpeechService } from "./speech/speech-runtime.js";
 import { AgentManager } from "./agent/agent-manager.js";
@@ -362,6 +368,7 @@ function describeMcpDebugPayload(value: unknown): Record<string, unknown> {
 
 export type PaseoOpenAIConfig = OpenAiSpeechProviderConfig;
 export type PaseoLocalSpeechConfig = LocalSpeechProviderConfig;
+export type PaseoSonioxSpeechConfig = SonioxSpeechProviderConfig;
 
 export interface PaseoSpeechSttLanguages {
   dictation: string;
@@ -372,6 +379,7 @@ export interface PaseoSpeechConfig {
   providers: RequestedSpeechProviders;
   sttLanguages?: PaseoSpeechSttLanguages;
   local?: PaseoLocalSpeechConfig;
+  soniox?: PaseoSonioxSpeechConfig;
 }
 
 export type DaemonLifecycleIntent =
@@ -565,6 +573,17 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
     pluginsEnabled: config.pluginsEnabled ?? false,
     plugins: config.plugins ?? {},
     skills: { selection: config.skillSelection },
+    speech: {
+      dictationSttProvider: config.speech?.providers.dictationStt.provider ?? "local",
+      voiceSttProvider: config.speech?.providers.voiceStt.provider ?? "local",
+      dictationLanguage: config.speech?.sttLanguages?.dictation ?? "vi",
+      voiceLanguage: config.speech?.sttLanguages?.voice ?? "vi",
+      sonioxApiKey: config.speech?.soniox?.apiKey ?? "",
+      sonioxModel: config.speech?.soniox?.model ?? DEFAULT_SONIOX_STT_MODEL,
+      sonioxLanguageHints: config.speech?.soniox?.languageHints ?? [
+        ...DEFAULT_SONIOX_LANGUAGE_HINTS,
+      ],
+    },
   };
 
   if (config.terminalProfiles !== undefined) {
@@ -576,6 +595,58 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
   }
 
   return initialConfig;
+}
+
+function applyMutableSpeechToConfig(
+  config: PaseoDaemonConfig,
+  mutableSpeech: MutableDaemonConfig["speech"],
+): PaseoSpeechConfig | undefined {
+  if (!mutableSpeech) {
+    return config.speech;
+  }
+  const reloaded = resolveConfigFromPersisted(
+    config.paseoHome,
+    loadPersistedConfig(config.paseoHome),
+    {
+      env: config.configReload?.env ?? process.env,
+      cli: config.configReload?.cli,
+      relayEnabledFallback: config.configReload?.relayEnabledFallback,
+    },
+  );
+  const baseSpeech = reloaded.speech ?? config.speech;
+  const currentProviders: RequestedSpeechProviders = baseSpeech?.providers ?? {
+    dictationStt: { provider: mutableSpeech.dictationSttProvider, explicit: true },
+    voiceStt: { provider: mutableSpeech.voiceSttProvider, explicit: true },
+    voiceTts: { provider: "local", explicit: false },
+    voiceTurnDetection: { provider: "local", explicit: false },
+  };
+  return {
+    ...baseSpeech,
+    providers: {
+      ...currentProviders,
+      dictationStt: {
+        provider: mutableSpeech.dictationSttProvider,
+        explicit: true,
+      },
+      voiceStt: {
+        provider: mutableSpeech.voiceSttProvider,
+        explicit: true,
+      },
+    },
+    sttLanguages: {
+      dictation: mutableSpeech.dictationLanguage,
+      voice: mutableSpeech.voiceLanguage,
+    },
+    soniox: {
+      apiKey: mutableSpeech.sonioxApiKey,
+      endpoint: baseSpeech?.soniox?.endpoint ?? DEFAULT_SONIOX_WS_ENDPOINT,
+      model: mutableSpeech.sonioxModel || DEFAULT_SONIOX_STT_MODEL,
+      languageHints:
+        mutableSpeech.sonioxLanguageHints && mutableSpeech.sonioxLanguageHints.length > 0
+          ? [...mutableSpeech.sonioxLanguageHints]
+          : [...DEFAULT_SONIOX_LANGUAGE_HINTS],
+    },
+  };
 }
 
 export async function createPaseoDaemon(
@@ -1595,6 +1666,11 @@ export async function createPaseoDaemon(
     logger,
     openaiConfig: config.openai,
     speechConfig: config.speech,
+  });
+  daemonConfigStore.onFieldChange("speech", () => {
+    const nextSpeech = applyMutableSpeechToConfig(config, daemonConfigStore.get().speech);
+    config.speech = nextSpeech;
+    void speechService.updateConfig?.({ speechConfig: nextSpeech ?? null });
   });
   logger.info({ elapsed: elapsed() }, "Speech service created");
 

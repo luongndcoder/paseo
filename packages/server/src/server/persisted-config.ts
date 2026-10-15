@@ -71,10 +71,20 @@ const LocalSpeechProviderSchema = z
   })
   .strict();
 
+const SonioxProviderSchema = z
+  .object({
+    apiKey: z.string().trim().min(1).optional(),
+    endpoint: z.string().trim().min(1).optional(),
+    model: z.string().trim().min(1).optional(),
+    languageHints: z.array(z.string().trim().min(1)).optional(),
+  })
+  .strict();
+
 const ProvidersSchema = z
   .object({
     openai: OpenAiProviderSchema.optional(),
     local: LocalSpeechProviderSchema.optional(),
+    soniox: SonioxProviderSchema.optional(),
   })
   .strict();
 
@@ -99,7 +109,7 @@ const SpeechProviderIdSchema = z
   .string()
   .trim()
   .toLowerCase()
-  .pipe(z.enum(["openai", "local"]));
+  .pipe(z.enum(["openai", "local", "soniox"]));
 
 const FeatureDictationSchema = z
   .object({

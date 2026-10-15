@@ -32,6 +32,15 @@ export const SHERPA_ONNX_MODEL_CATALOG = {
     description:
       "NVIDIA Parakeet TDT v3 (offline NeMo transducer, 25 European languages, auto-detected).",
   },
+  "nemotron-3.5-560ms-int8": {
+    kind: "stt-offline",
+    archiveUrl:
+      "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11/resolve/main/tokens.txt",
+    extractedDir: "nemotron-3.5-560ms-int8",
+    requiredFiles: ["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"],
+    description:
+      "NVIDIA Nemotron 3.5 ASR Streaming 0.6B INT8 (560ms cache-aware transducer, Vietnamese & multilingual).",
+  },
   "kokoro-en-v0_19": {
     kind: "tts",
     archiveUrl:

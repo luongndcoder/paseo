@@ -4,10 +4,18 @@ import type { StreamingTranscriptionSession } from "../../speech-provider.js";
 import type { TurnDetectionSession } from "../../turn-detection-provider.js";
 import { getLocalSpeechModelDir, type LocalSttModelId, type LocalTtsModelId } from "./models.js";
 import { SherpaOfflineRecognizerEngine } from "./sherpa/sherpa-offline-recognizer.js";
+import {
+  SherpaOnlineNemotronEngine,
+  SherpaOnlineNemotronSTT,
+} from "./sherpa/sherpa-online-nemotron-stt.js";
 import { SherpaOnnxParakeetSTT } from "./sherpa/sherpa-parakeet-stt.js";
 import { SherpaParakeetRealtimeTranscriptionSession } from "./sherpa/sherpa-parakeet-realtime-session.js";
 import { SherpaOnnxTTS } from "./sherpa/sherpa-tts.js";
-import { getVietnameseDictationModelDirectory } from "./sherpa/vietnamese-model.js";
+import {
+  getVietnameseDictationModelDirectory,
+  isNemotronModelInstalledSync,
+  resolveInstalledNemotronModelSync,
+} from "./sherpa/vietnamese-model.js";
 import {
   ensureSileroVadModel,
   SherpaSileroTurnDetectionProvider,
@@ -21,14 +29,15 @@ import { bufferToWorkerBytes, workerBytesToBuffer } from "./worker-bytes.js";
 
 process.title = "Paseo Voice";
 
-type LocalSttEngine = SherpaOfflineRecognizerEngine;
+type LocalSttEngine = SherpaOfflineRecognizerEngine | SherpaOnlineNemotronEngine;
+type LocalSttProvider = SherpaOnnxParakeetSTT | SherpaOnlineNemotronSTT;
 
 const logger = pino({
   level: process.env.PASEO_LOG_LEVEL ?? "info",
 }).child({ module: "speech", component: "local-worker" });
 
 const sttEngines = new Map<string, LocalSttEngine>();
-const sttProviders = new Map<string, SherpaOnnxParakeetSTT>();
+const sttProviders = new Map<string, LocalSttProvider>();
 const ttsProviders = new Map<string, SherpaOnnxTTS>();
 const sessions = new Map<string, StreamingTranscriptionSession | TurnDetectionSession>();
 const unsubscribeBySessionId = new Map<string, Array<() => void>>();
@@ -60,13 +69,15 @@ function ttsModelId(config: LocalSpeechWorkerConfig): LocalTtsModelId {
   return config.voiceTtsModel as LocalTtsModelId;
 }
 
-function usesVietnameseDictationModel(
-  config: LocalSpeechWorkerConfig,
-  model: "voice" | "dictation",
-): boolean {
-  // WHY: the existing local dictation language setting is the selector, so this model stays
-  // internal and does not expand the public model-id config schema.
-  return model === "dictation" && /^vi(?:-|$)/i.test(config.dictationLanguage ?? "");
+function usesNemotronModel(config: LocalSpeechWorkerConfig, model: "voice" | "dictation"): boolean {
+  const modelId = sttModelId(config, model);
+  if (modelId === "nemotron-3.5-560ms-int8") {
+    return true;
+  }
+  if (/^vi(?:-|$)/i.test(config.dictationLanguage ?? "")) {
+    return true;
+  }
+  return isNemotronModelInstalledSync(config.modelsDir);
 }
 
 function ttsKey(config: LocalSpeechWorkerConfig): string {
@@ -83,8 +94,18 @@ function sttEngineKey(
   model: "voice" | "dictation",
   modelId: LocalSttModelId,
 ): string {
-  return usesVietnameseDictationModel(config, model)
-    ? `${config.modelsDir}:zipformer-vi-30m-int8`
+  return usesNemotronModel(config, model)
+    ? `${config.modelsDir}:nemotron-3.5-560ms-int8`
+    : `${config.modelsDir}:${modelId}`;
+}
+
+function sttProviderKey(
+  config: LocalSpeechWorkerConfig,
+  model: "voice" | "dictation",
+  modelId: LocalSttModelId,
+): string {
+  return usesNemotronModel(config, model)
+    ? `${config.modelsDir}:nemotron-3.5-560ms-int8:${config.dictationLanguage ?? "vi"}`
     : `${config.modelsDir}:${modelId}`;
 }
 
@@ -93,27 +114,42 @@ function getSttEngine(
   model: "voice" | "dictation",
 ): LocalSttEngine {
   const modelId = sttModelId(config, model);
-  const vietnamese = usesVietnameseDictationModel(config, model);
+  const useNemotron = usesNemotronModel(config, model);
   const key = sttEngineKey(config, model, modelId);
   const existing = sttEngines.get(key);
   if (existing) {
     return existing;
   }
-  const modelDir = vietnamese
-    ? getVietnameseDictationModelDirectory(config.modelsDir)
-    : getLocalSpeechModelDir(config.modelsDir, modelId);
+  if (useNemotron) {
+    const resolved = resolveInstalledNemotronModelSync(config.modelsDir);
+    const modelDir = resolved?.modelDir ?? getVietnameseDictationModelDirectory(config.modelsDir);
+    const created = new SherpaOnlineNemotronEngine(
+      {
+        modelDir,
+        encoderPath: resolved?.encoderPath,
+        decoderPath: resolved?.decoderPath,
+        joinerPath: resolved?.joinerPath,
+        tokensPath: resolved?.tokensPath,
+        numThreads: 4,
+      },
+      logger,
+    );
+    sttEngines.set(key, created);
+    return created;
+  }
+
+  const modelDir = getLocalSpeechModelDir(config.modelsDir, modelId);
   const created = new SherpaOfflineRecognizerEngine(
     {
       model: {
-        kind: vietnamese ? "transducer" : "nemo_transducer",
+        kind: "nemo_transducer",
         encoder: `${modelDir}/encoder.int8.onnx`,
-        decoder: `${modelDir}/${vietnamese ? "decoder.onnx" : "decoder.int8.onnx"}`,
+        decoder: `${modelDir}/decoder.int8.onnx`,
         joiner: `${modelDir}/joiner.int8.onnx`,
         tokens: `${modelDir}/tokens.txt`,
       },
       numThreads: 2,
       debug: 0,
-      ...(vietnamese ? { uppercaseVocabulary: true, textLocale: "vi" } : {}),
     },
     logger,
   );
@@ -124,14 +160,29 @@ function getSttEngine(
 function getSttProvider(
   config: LocalSpeechWorkerConfig,
   model: "voice" | "dictation",
-): SherpaOnnxParakeetSTT {
+): LocalSttProvider {
   const modelId = sttModelId(config, model);
-  const key = sttEngineKey(config, model, modelId);
+  const useNemotron = usesNemotronModel(config, model);
+  const key = sttProviderKey(config, model, modelId);
   const existing = sttProviders.get(key);
   if (existing) {
     return existing;
   }
-  const created = new SherpaOnnxParakeetSTT({ engine: getSttEngine(config, model) }, logger);
+  const engine = getSttEngine(config, model);
+  const created: LocalSttProvider = useNemotron
+    ? new SherpaOnlineNemotronSTT(
+        {
+          engine: engine as SherpaOnlineNemotronEngine,
+          defaultLanguage: config.dictationLanguage || "vi",
+        },
+        logger,
+      )
+    : new SherpaOnnxParakeetSTT(
+        {
+          engine: engine as SherpaOfflineRecognizerEngine,
+        },
+        logger,
+      );
   sttProviders.set(key, created);
   return created;
 }
@@ -234,11 +285,15 @@ async function createSession(
   }
 
   const model = message.kind === "voiceStt" ? "voice" : "dictation";
-  const engine = getSttEngine(message.config, model);
   const session =
-    message.kind === "voiceStt"
-      ? getSttProvider(message.config, "voice").createSession({ logger })
-      : new SherpaParakeetRealtimeTranscriptionSession({ engine });
+    message.kind === "voiceStt" || usesNemotronModel(message.config, model)
+      ? getSttProvider(message.config, model).createSession({
+          logger,
+          language: message.config.dictationLanguage || "vi",
+        })
+      : new SherpaParakeetRealtimeTranscriptionSession({
+          engine: getSttEngine(message.config, model) as SherpaOfflineRecognizerEngine,
+        });
   trackTranscriptionSession(message.sessionId, session);
   await session.connect();
   sessions.set(message.sessionId, session);

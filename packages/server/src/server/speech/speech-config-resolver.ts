@@ -4,6 +4,7 @@ import type { PersistedConfig } from "../persisted-config.js";
 import type { PaseoOpenAIConfig, PaseoSpeechConfig } from "../bootstrap.js";
 import { resolveLocalSpeechConfig } from "./providers/local/config.js";
 import { resolveOpenAiSpeechConfig } from "./providers/openai/config.js";
+import { resolveSonioxSpeechProviderConfigFromEnv } from "./providers/soniox/config.js";
 import {
   SpeechProviderIdSchema,
   type RequestedSpeechProvider,
@@ -169,12 +170,18 @@ export function resolveSpeechConfig(params: {
     providers,
   });
 
+  const soniox = resolveSonioxSpeechProviderConfigFromEnv({
+    env: params.env,
+    persisted: params.persisted,
+  });
+
   return {
     openai,
     speech: {
       providers,
       sttLanguages: local.sttLanguages,
       ...(local.local ? { local: local.local } : {}),
+      soniox,
     },
   };
 }

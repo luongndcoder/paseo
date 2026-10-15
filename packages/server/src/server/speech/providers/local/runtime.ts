@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import type { Logger } from "pino";
 
 import type { PaseoSpeechConfig } from "../../../bootstrap.js";
@@ -13,6 +15,7 @@ import {
   type LocalSttModelId,
   type LocalTtsModelId,
 } from "./models.js";
+import { isNemotronModelInstalledSync } from "./sherpa/vietnamese-model.js";
 import {
   LocalSpeechWorkerClient,
   WorkerBackedSpeechToTextProvider,
@@ -36,6 +39,8 @@ export interface InitializedLocalSpeech {
   sttService: SpeechToTextProvider | null;
   ttsService: TextToSpeechProvider | null;
   dictationSttService: SpeechToTextProvider | null;
+  localVoiceSttProvider: SpeechToTextProvider | null;
+  localDictationSttProvider: SpeechToTextProvider | null;
   localVoiceTtsProvider: TextToSpeechProvider | null;
   localModelConfig: {
     modelsDir: string;
@@ -70,22 +75,78 @@ export function getLocalSpeechAvailability(
   };
 }
 
+function isLocalOrSonioxProviderEnabled(provider: {
+  enabled?: boolean;
+  provider: string;
+}): boolean {
+  return (
+    provider.enabled !== false && (provider.provider === "local" || provider.provider === "soniox")
+  );
+}
+
+function isTempTestModelsDir(modelsDir: string | null | undefined): boolean {
+  if (!modelsDir) {
+    return false;
+  }
+  const normalized = path.resolve(modelsDir);
+  const tmpDir = path.resolve(os.tmpdir());
+  return (
+    normalized.startsWith(tmpDir + path.sep) ||
+    normalized.startsWith("/tmp/") ||
+    normalized.startsWith("/private/tmp/") ||
+    normalized.includes("paseo-missing-models-") ||
+    normalized.includes("missing-local-speech-models")
+  );
+}
+
+function shouldUseNemotronStt(params: {
+  modelId: LocalSttModelId;
+  language: string;
+  modelsDir: string | null | undefined;
+}): boolean {
+  if (params.modelId === "nemotron-3.5-560ms-int8") {
+    return true;
+  }
+  if (/^vi(?:-|$)/i.test(params.language)) {
+    return true;
+  }
+  if (
+    !isTempTestModelsDir(params.modelsDir) &&
+    isNemotronModelInstalledSync(params.modelsDir ?? undefined)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function computeRequiredLocalModelIds(params: {
   providers: RequestedSpeechProviders;
   models: ResolvedLocalModels;
+  language: string;
+  modelsDir: string | null | undefined;
 }): LocalSpeechModelId[] {
   const ids = new Set<LocalSpeechModelId>();
-  if (
-    params.providers.dictationStt.enabled !== false &&
-    params.providers.dictationStt.provider === "local"
-  ) {
-    ids.add(params.models.dictationLocalSttModel);
+  if (isLocalOrSonioxProviderEnabled(params.providers.dictationStt)) {
+    if (
+      !shouldUseNemotronStt({
+        modelId: params.models.dictationLocalSttModel,
+        language: params.language,
+        modelsDir: params.modelsDir,
+      })
+    ) {
+      ids.add(params.models.dictationLocalSttModel);
+    }
   }
-  if (
-    params.providers.voiceStt.enabled !== false &&
-    params.providers.voiceStt.provider === "local"
-  ) {
-    ids.add(params.models.voiceLocalSttModel);
+  if (isLocalOrSonioxProviderEnabled(params.providers.voiceStt)) {
+    if (
+      !shouldUseNemotronStt({
+        modelId: params.models.voiceLocalSttModel,
+        language: params.language,
+        modelsDir: params.modelsDir,
+      })
+    ) {
+      ids.add(params.models.voiceLocalSttModel);
+    }
   }
   if (
     params.providers.voiceTts.enabled !== false &&
@@ -102,11 +163,25 @@ function isLocalProviderEnabled(provider: { enabled?: boolean; provider: string 
 
 function shouldEnsureVietnameseDictationModel(params: {
   providers: RequestedSpeechProviders;
+  models: ResolvedLocalModels;
   language: string;
+  modelsDir: string | null | undefined;
 }): boolean {
-  return (
-    isLocalProviderEnabled(params.providers.dictationStt) && /^vi(?:-|$)/i.test(params.language)
-  );
+  const dictationUsesNemotron =
+    isLocalOrSonioxProviderEnabled(params.providers.dictationStt) &&
+    shouldUseNemotronStt({
+      modelId: params.models.dictationLocalSttModel,
+      language: params.language,
+      modelsDir: params.modelsDir,
+    });
+  const voiceUsesNemotron =
+    isLocalOrSonioxProviderEnabled(params.providers.voiceStt) &&
+    shouldUseNemotronStt({
+      modelId: params.models.voiceLocalSttModel,
+      language: params.language,
+      modelsDir: params.modelsDir,
+    });
+  return dictationUsesNemotron || voiceUsesNemotron;
 }
 
 function resolveLocalDictationLanguage(speechConfig: PaseoSpeechConfig | null): string {
@@ -159,7 +234,9 @@ export async function initializeLocalSpeechServices(params: {
   const dictationLanguage = resolveLocalDictationLanguage(speechConfig);
   const ensureVietnameseDictationModel = shouldEnsureVietnameseDictationModel({
     providers,
+    models: localModels,
     language: dictationLanguage,
+    modelsDir: localConfig?.modelsDir,
   });
 
   let sttService: SpeechToTextProvider | null = null;
@@ -171,6 +248,8 @@ export async function initializeLocalSpeechServices(params: {
   const requiredLocalModelIds = computeRequiredLocalModelIds({
     providers,
     models: localModels,
+    language: dictationLanguage,
+    modelsDir: localConfig?.modelsDir,
   });
 
   const workerClient = localConfig
@@ -188,6 +267,13 @@ export async function initializeLocalSpeechServices(params: {
       })
     : null;
 
+  const localVoiceSttProvider = workerClient
+    ? initializeLocalVoiceStt({ client: workerClient })
+    : null;
+  const localDictationSttProvider = workerClient
+    ? initializeLocalDictationStt({ client: workerClient })
+    : null;
+
   if (isLocalProviderEnabled(providers.voiceTurnDetection)) {
     if (workerClient) {
       turnDetectionService = initializeLocalTurnDetection({ client: workerClient });
@@ -197,16 +283,16 @@ export async function initializeLocalSpeechServices(params: {
   }
 
   if (isLocalProviderEnabled(providers.voiceStt)) {
-    if (workerClient) {
-      sttService = initializeLocalVoiceStt({ client: workerClient });
+    if (localVoiceSttProvider) {
+      sttService = localVoiceSttProvider;
     } else {
       warnLocalConfigMissing(logger, "voice STT");
     }
   }
 
   if (isLocalProviderEnabled(providers.dictationStt)) {
-    if (workerClient) {
-      dictationSttService = initializeLocalDictationStt({ client: workerClient });
+    if (localDictationSttProvider) {
+      dictationSttService = localDictationSttProvider;
     } else {
       warnLocalConfigMissing(logger, "dictation STT");
     }
@@ -232,6 +318,8 @@ export async function initializeLocalSpeechServices(params: {
     sttService,
     ttsService,
     dictationSttService,
+    localVoiceSttProvider,
+    localDictationSttProvider,
     localVoiceTtsProvider,
     localModelConfig: localConfig
       ? {

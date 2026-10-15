@@ -6,6 +6,11 @@ import { pipeline } from "node:stream/promises";
 import type pino from "pino";
 
 import { getSherpaOnnxModelSpec, type SherpaOnnxModelId } from "./model-catalog.js";
+import {
+  ensureVietnameseSherpaModel,
+  NEMOTRON_MODEL_ID,
+  resolveInstalledNemotronModelSync,
+} from "./vietnamese-model.js";
 import { spawnProcess } from "../../../../../utils/spawn.js";
 
 export interface EnsureSherpaOnnxModelOptions {
@@ -16,6 +21,12 @@ export interface EnsureSherpaOnnxModelOptions {
 }
 
 export function getSherpaOnnxModelDir(modelsDir: string, modelId: SherpaOnnxModelId): string {
+  if (modelId === NEMOTRON_MODEL_ID) {
+    const installed = resolveInstalledNemotronModelSync(modelsDir);
+    if (installed) {
+      return installed.modelDir;
+    }
+  }
   const spec = getSherpaOnnxModelSpec(modelId);
   return path.join(modelsDir, spec.extractedDir);
 }
@@ -115,6 +126,9 @@ export async function isSherpaOnnxModelInstalled(
   modelsDir: string,
   modelId: SherpaOnnxModelId,
 ): Promise<boolean> {
+  if (modelId === NEMOTRON_MODEL_ID) {
+    return resolveInstalledNemotronModelSync(modelsDir) !== null;
+  }
   const spec = getSherpaOnnxModelSpec(modelId);
   const { modelDir, archivePath } = getSherpaOnnxModelPaths(modelsDir, modelId);
   return (
@@ -140,6 +154,11 @@ export async function ensureSherpaOnnxModel(
     component: "model-downloader",
     modelId: options.modelId,
   });
+
+  if (options.modelId === NEMOTRON_MODEL_ID) {
+    const files = await ensureVietnameseSherpaModel(options.modelsDir, logger);
+    return files.modelDir;
+  }
 
   const spec = getSherpaOnnxModelSpec(options.modelId);
   const { modelDir, archivePath, extractionDir } = getSherpaOnnxModelPaths(

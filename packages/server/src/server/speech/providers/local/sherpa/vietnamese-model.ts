@@ -1,80 +1,174 @@
-import { createWriteStream } from "node:fs";
-import { mkdir, readFile, rename, rm, stat } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createWriteStream, existsSync, statSync } from "node:fs";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type pino from "pino";
 
-import { spawnProcess } from "../../../../../utils/spawn.js";
+export const NEMOTRON_MODEL_ID = "nemotron-3.5-560ms-int8";
+export const VIETNAMESE_SHERPA_MODEL_DIR_NAME = NEMOTRON_MODEL_ID;
 
-const MODEL_ID = "sherpa-onnx-zipformer-vi-30M-int8-2026-02-09";
-// WHY: Sherpa's converted archive includes the token table required by its ONNX runtime.
-const MODEL_URL = `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/${MODEL_ID}.tar.bz2`;
-const MODEL_SHA256 = "da8b637947091829d7ee9eda23da2a4ec7caa399233a3f4e34eb719fb2ea6b9b";
-const REQUIRED_FILES = ["encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx", "tokens.txt"];
+const HF_NEMOTRON_REPO =
+  "csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11";
+const HF_NEMOTRON_BASE_URL = `https://huggingface.co/${HF_NEMOTRON_REPO}/resolve/main`;
 
-function modelDirectory(modelsDir: string): string {
-  return path.join(modelsDir, MODEL_ID);
+const REQUIRED_NEMOTRON_FILES = [
+  "tokens.txt",
+  "decoder.int8.onnx",
+  "joiner.int8.onnx",
+  "encoder.int8.onnx",
+] as const;
+
+export interface VietnameseSherpaModelFiles {
+  modelDir: string;
+  encoderPath: string;
+  decoderPath: string;
+  joinerPath: string;
+  tokensPath: string;
 }
 
-async function hasRequiredFiles(directory: string): Promise<boolean> {
-  const files = await Promise.all(
-    REQUIRED_FILES.map(async (filename) => {
-      try {
-        const info = await stat(path.join(directory, filename));
-        return info.isFile() && info.size > 0;
-      } catch {
-        return false;
+function getCandidateNemotronDirs(modelsDir?: string | null): string[] {
+  const candidates = [
+    process.env.PASEO_NEMOTRON_MODEL_DIR?.trim(),
+    process.env.VOICESCRIBE_NEMOTRON_DIR?.trim(),
+    process.env.PASEO_VIETNAMESE_MODEL_DIR?.trim(),
+    path.join(os.homedir(), ".voicescribe", "models", NEMOTRON_MODEL_ID),
+    modelsDir ? path.join(modelsDir, NEMOTRON_MODEL_ID) : undefined,
+    path.join(os.homedir(), ".paseo", "models", "local-speech", NEMOTRON_MODEL_ID),
+  ].filter((value): value is string => Boolean(value && value.length > 0));
+
+  return Array.from(new Set(candidates.map((dir) => path.resolve(dir))));
+}
+
+function resolveFromDirSync(dir: string): VietnameseSherpaModelFiles | null {
+  const encoderPath = path.join(dir, "encoder.int8.onnx");
+  const decoderPath = path.join(dir, "decoder.int8.onnx");
+  const joinerPath = path.join(dir, "joiner.int8.onnx");
+  const tokensPath = path.join(dir, "tokens.txt");
+
+  for (const filePath of [encoderPath, decoderPath, joinerPath, tokensPath]) {
+    try {
+      const stat = statSync(filePath);
+      if (!stat.isFile() || stat.size === 0) {
+        return null;
       }
-    }),
-  );
-  return files.every(Boolean);
+    } catch {
+      return null;
+    }
+  }
+
+  return {
+    modelDir: dir,
+    encoderPath,
+    decoderPath,
+    joinerPath,
+    tokensPath,
+  };
+}
+
+export function resolveInstalledNemotronModelSync(
+  modelsDir?: string | null,
+): VietnameseSherpaModelFiles | null {
+  for (const dir of getCandidateNemotronDirs(modelsDir)) {
+    const resolved = resolveFromDirSync(dir);
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return null;
+}
+
+export function isNemotronModelInstalledSync(modelsDir?: string | null): boolean {
+  return resolveInstalledNemotronModelSync(modelsDir) !== null;
 }
 
 export async function isVietnameseDictationModelInstalled(modelsDir: string): Promise<boolean> {
-  return hasRequiredFiles(modelDirectory(modelsDir));
+  return isNemotronModelInstalledSync(modelsDir);
 }
 
-async function downloadArchive(
+export function getVietnameseDictationModelDirectory(modelsDir: string): string {
+  const installed = resolveInstalledNemotronModelSync(modelsDir);
+  if (installed) {
+    return installed.modelDir;
+  }
+  return path.join(modelsDir, NEMOTRON_MODEL_ID);
+}
+
+async function downloadFileToPath(
   url: string,
-  outputPath: string,
+  targetPath: string,
   signal?: AbortSignal,
 ): Promise<void> {
-  const response = await fetch(url, { signal });
+  const tmpPath = `${targetPath}.part-${process.pid}-${Date.now()}`;
+  const response = await fetch(url, { redirect: "follow", signal });
   if (!response.ok || !response.body) {
-    throw new Error(
-      `Failed to download Vietnamese speech model: ${response.status} ${response.statusText}`,
-    );
+    throw new Error(`HTTP ${response.status} ${response.statusText} while downloading ${url}`);
   }
-  await mkdir(path.dirname(outputPath), { recursive: true });
-  const temporaryPath = `${outputPath}.tmp-${process.pid}`;
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  const nodeStream = Readable.fromWeb(response.body as never);
   try {
-    await pipeline(
-      Readable.fromWeb(response.body as never),
-      createWriteStream(temporaryPath, { flags: "wx" }),
-      { signal },
-    );
-    await rename(temporaryPath, outputPath);
+    await pipeline(nodeStream, createWriteStream(tmpPath), { signal });
+    await fs.rename(tmpPath, targetPath);
   } catch (error) {
-    await rm(temporaryPath, { force: true }).catch(() => undefined);
+    await fs.rm(tmpPath, { force: true }).catch(() => undefined);
     throw error;
   }
 }
 
-async function extractArchive(archivePath: string, destination: string, signal?: AbortSignal) {
-  await mkdir(destination, { recursive: true });
-  await new Promise<void>((resolve, reject) => {
-    const child = spawnProcess("tar", ["xf", archivePath, "-C", destination], {
-      stdio: "ignore",
-      signal,
-    });
-    child.once("error", reject);
-    child.once("exit", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`Vietnamese speech model extraction failed (tar exited ${code})`));
-    });
+export async function ensureVietnameseSherpaModel(
+  modelsDir: string,
+  logger: pino.Logger,
+  signal?: AbortSignal,
+): Promise<VietnameseSherpaModelFiles> {
+  const log = logger.child({
+    component: "nemotron-sherpa-model",
+    model: NEMOTRON_MODEL_ID,
   });
+
+  const existing = resolveInstalledNemotronModelSync(modelsDir);
+  if (existing) {
+    log.info(
+      { modelDir: existing.modelDir },
+      "Resolved installed NVIDIA Nemotron 3.5 ASR model on disk",
+    );
+    return existing;
+  }
+
+  const targetDir = path.join(path.resolve(modelsDir), NEMOTRON_MODEL_ID);
+  await fs.mkdir(targetDir, { recursive: true });
+
+  log.info(
+    { targetDir, repo: HF_NEMOTRON_REPO },
+    "Downloading NVIDIA Nemotron 3.5 ASR model files from HuggingFace",
+  );
+
+  for (const fileName of REQUIRED_NEMOTRON_FILES) {
+    const destPath = path.join(targetDir, fileName);
+    if (existsSync(destPath)) {
+      try {
+        const stat = await fs.stat(destPath);
+        if (stat.isFile() && stat.size > 0) {
+          continue;
+        }
+      } catch {
+        // continue to download
+      }
+    }
+    const url = `${HF_NEMOTRON_BASE_URL}/${fileName}`;
+    log.info({ fileName, url }, "Downloading Nemotron 3.5 model file");
+    await downloadFileToPath(url, destPath, signal);
+  }
+
+  const resolved = resolveFromDirSync(targetDir);
+  if (!resolved) {
+    throw new Error(
+      `Nemotron 3.5 model download completed at ${targetDir}, but required ONNX files were not found`,
+    );
+  }
+
+  log.info({ modelDir: resolved.modelDir }, "Nemotron 3.5 ASR model ready");
+  return resolved;
 }
 
 export async function ensureVietnameseDictationModel(options: {
@@ -82,57 +176,10 @@ export async function ensureVietnameseDictationModel(options: {
   logger: pino.Logger;
   signal?: AbortSignal;
 }): Promise<string> {
-  const { modelsDir, logger, signal } = options;
-  const targetDirectory = modelDirectory(modelsDir);
-  if (await hasRequiredFiles(targetDirectory)) return targetDirectory;
-
-  const downloadsDirectory = path.join(modelsDir, ".downloads");
-  const archivePath = path.join(downloadsDirectory, `${MODEL_ID}.tar.bz2`);
-  const extractionPath = path.join(downloadsDirectory, `${MODEL_ID}.extracting-${process.pid}`);
-  const extractedModelPath = path.join(extractionPath, MODEL_ID);
-  logger.info({ modelId: MODEL_ID, modelsDir }, "Downloading Vietnamese dictation model");
-
-  try {
-    await mkdir(downloadsDirectory, { recursive: true });
-    try {
-      const archiveStat = await stat(archivePath);
-      if (!archiveStat.isFile() || archiveStat.size === 0) {
-        await rm(archivePath, { force: true });
-        await downloadArchive(MODEL_URL, archivePath, signal);
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      await downloadArchive(MODEL_URL, archivePath, signal);
-    }
-
-    const archive = await readFile(archivePath);
-    const archiveSha256 = createHash("sha256").update(archive).digest("hex");
-    if (archiveSha256 !== MODEL_SHA256) {
-      await rm(archivePath, { force: true });
-      throw new Error("Downloaded Vietnamese speech model failed SHA-256 verification");
-    }
-
-    await rm(extractionPath, { recursive: true, force: true });
-    await extractArchive(archivePath, extractionPath, signal);
-    if (!(await hasRequiredFiles(extractedModelPath))) {
-      throw new Error(
-        `Vietnamese model archive is missing required files: ${REQUIRED_FILES.join(", ")}`,
-      );
-    }
-
-    await rm(targetDirectory, { recursive: true, force: true });
-    await rename(extractedModelPath, targetDirectory);
-    await rm(archivePath, { force: true });
-    return targetDirectory;
-  } catch (error) {
-    await rm(archivePath, { force: true }).catch(() => undefined);
-    logger.error({ err: error, modelId: MODEL_ID }, "Vietnamese dictation model download failed");
-    throw error;
-  } finally {
-    await rm(extractionPath, { recursive: true, force: true }).catch(() => undefined);
-  }
-}
-
-export function getVietnameseDictationModelDirectory(modelsDir: string): string {
-  return modelDirectory(modelsDir);
+  const resolved = await ensureVietnameseSherpaModel(
+    options.modelsDir,
+    options.logger,
+    options.signal,
+  );
+  return resolved.modelDir;
 }

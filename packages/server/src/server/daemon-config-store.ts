@@ -31,6 +31,7 @@ interface SupportedMutableConfigPatch {
   skills?: MutableDaemonConfig["skills"];
   pluginsEnabled?: boolean;
   plugins?: MutableDaemonConfig["plugins"];
+  speech?: MutableDaemonConfigPatch["speech"];
 }
 
 interface LoggerLike {
@@ -189,6 +190,13 @@ const RELOADABLE_PATHS = [
   "agents.metadataGeneration",
   "agents.skills.selection",
   "pluginsEnabled",
+  "features.dictation.stt.provider",
+  "features.dictation.stt.language",
+  "features.voiceMode.stt.provider",
+  "features.voiceMode.stt.language",
+  "providers.soniox.apiKey",
+  "providers.soniox.model",
+  "providers.soniox.languageHints",
 ] as const;
 
 const PERSISTED_TO_MUTABLE_PATH = new Map<string, string>([
@@ -212,6 +220,13 @@ const PERSISTED_TO_MUTABLE_PATH = new Map<string, string>([
   ["agents.metadataGeneration", "metadataGeneration"],
   ["agents.skills.selection", "skills.selection"],
   ["pluginsEnabled", "pluginsEnabled"],
+  ["features.dictation.stt.provider", "speech.dictationSttProvider"],
+  ["features.dictation.stt.language", "speech.dictationLanguage"],
+  ["features.voiceMode.stt.provider", "speech.voiceSttProvider"],
+  ["features.voiceMode.stt.language", "speech.voiceLanguage"],
+  ["providers.soniox.apiKey", "speech.sonioxApiKey"],
+  ["providers.soniox.model", "speech.sonioxModel"],
+  ["providers.soniox.languageHints", "speech.sonioxLanguageHints"],
 ]);
 
 function pathBelongsTo(path: string, owner: string): boolean {
@@ -276,6 +291,7 @@ function pickSupportedPatchFields(patch: MutableDaemonConfigPatch): SupportedMut
     ...(patch.agentProfiles !== undefined ? { agentProfiles: patch.agentProfiles } : {}),
     ...(patch.pluginsEnabled !== undefined ? { pluginsEnabled: patch.pluginsEnabled } : {}),
     ...(patch.plugins !== undefined ? { plugins: patch.plugins } : {}),
+    ...(patch.speech !== undefined ? { speech: patch.speech } : {}),
   };
 }
 
@@ -584,13 +600,94 @@ function mergeMutablePatchIntoPersistedConfig(params: {
   const { persisted, patch, removeProviders, persistRelayEnabled } = params;
   const daemon = mergeMutableDaemonPatch(persisted.daemon, patch, persistRelayEnabled);
   const agents = mergeMutableAgentPatch(persisted.agents, patch, removeProviders);
+  const { features, providers } = mergeMutableSpeechPatch(
+    persisted.features,
+    persisted.providers,
+    patch.speech,
+  );
   return {
     ...persisted,
     ...(patch.pluginsEnabled !== undefined ? { pluginsEnabled: patch.pluginsEnabled } : {}),
     ...(patch.plugins !== undefined ? { plugins: patch.plugins } : {}),
     ...(daemon ? { daemon } : { daemon: undefined }),
     ...(agents ? { agents } : { agents: undefined }),
+    ...(features ? { features } : { features: undefined }),
+    ...(providers ? { providers } : { providers: undefined }),
   } as PersistedConfig;
+}
+
+function mergeMutableSpeechPatch(
+  persistedFeatures: PersistedConfig["features"],
+  persistedProviders: PersistedConfig["providers"],
+  speechPatch: SupportedMutableConfigPatch["speech"],
+): {
+  features: PersistedConfig["features"];
+  providers: PersistedConfig["providers"];
+} {
+  if (!speechPatch) {
+    return {
+      features: persistedFeatures,
+      providers: persistedProviders,
+    };
+  }
+
+  const nextFeatures: NonNullable<PersistedConfig["features"]> = {
+    ...persistedFeatures,
+  };
+  if (
+    speechPatch.dictationSttProvider !== undefined ||
+    speechPatch.dictationLanguage !== undefined
+  ) {
+    nextFeatures.dictation = {
+      ...nextFeatures.dictation,
+      enabled: true,
+      stt: {
+        ...nextFeatures.dictation?.stt,
+        ...(speechPatch.dictationSttProvider !== undefined
+          ? { provider: speechPatch.dictationSttProvider }
+          : {}),
+        ...(speechPatch.dictationLanguage !== undefined
+          ? { language: speechPatch.dictationLanguage }
+          : {}),
+      },
+    };
+  }
+  if (speechPatch.voiceSttProvider !== undefined || speechPatch.voiceLanguage !== undefined) {
+    nextFeatures.voiceMode = {
+      ...nextFeatures.voiceMode,
+      enabled: true,
+      stt: {
+        ...nextFeatures.voiceMode?.stt,
+        ...(speechPatch.voiceSttProvider !== undefined
+          ? { provider: speechPatch.voiceSttProvider }
+          : {}),
+        ...(speechPatch.voiceLanguage !== undefined ? { language: speechPatch.voiceLanguage } : {}),
+      },
+    };
+  }
+
+  const nextProviders: NonNullable<PersistedConfig["providers"]> = {
+    ...persistedProviders,
+  };
+  if (
+    speechPatch.sonioxApiKey !== undefined ||
+    speechPatch.sonioxModel !== undefined ||
+    speechPatch.sonioxLanguageHints !== undefined
+  ) {
+    nextProviders.soniox = {
+      ...nextProviders.soniox,
+      ...(speechPatch.sonioxApiKey !== undefined ? { apiKey: speechPatch.sonioxApiKey } : {}),
+      ...(speechPatch.sonioxModel !== undefined ? { model: speechPatch.sonioxModel } : {}),
+      ...(speechPatch.sonioxLanguageHints !== undefined
+        ? { languageHints: speechPatch.sonioxLanguageHints }
+        : {}),
+    };
+  }
+
+  return {
+    features: Object.keys(nextFeatures).length > 0 ? nextFeatures : undefined,
+    providers: Object.keys(nextProviders).length > 0 ? nextProviders : undefined,
+  };
 }
 
 function mergeMutableAgentPatch(

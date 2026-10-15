@@ -171,6 +171,21 @@ const MutableRelayConfigSchema = z
   })
   .passthrough();
 
+export const MutableSpeechSttProviderIdSchema = z.enum(["local", "soniox", "openai"]);
+export type MutableSpeechSttProviderId = z.infer<typeof MutableSpeechSttProviderIdSchema>;
+
+const MutableSpeechConfigSchema = z
+  .object({
+    dictationSttProvider: MutableSpeechSttProviderIdSchema.default("local"),
+    voiceSttProvider: MutableSpeechSttProviderIdSchema.default("local"),
+    dictationLanguage: z.string().default("vi"),
+    voiceLanguage: z.string().default("vi"),
+    sonioxApiKey: z.string().default(""),
+    sonioxModel: z.string().default("stt-rt-v5"),
+    sonioxLanguageHints: z.array(z.string()).default(["vi", "en"]),
+  })
+  .passthrough();
+
 export const MutableDaemonConfigSchema = z
   .object({
     // COMPAT(relayConfig): added in v0.2.6, remove after 2027-01-31 when old daemons are unsupported.
@@ -198,6 +213,7 @@ export const MutableDaemonConfigSchema = z
     app: z.object({ baseUrl: z.string() }).optional(),
     catalogRefreshTimeoutMs: z.number().int().positive().optional(),
     browserTools: MutableBrowserToolsConfigSchema.default({ enabled: false }),
+    speech: MutableSpeechConfigSchema.optional(),
     providers: z.record(z.string(), MutableDaemonProviderConfigSchema).default({}),
     metadataGeneration: MutableMetadataGenerationConfigSchema.default({ providers: [] }),
     autoArchiveAfterMerge: z.boolean().default(false),
@@ -216,6 +232,7 @@ export const MutableDaemonConfigPatchSchema = z
     relay: MutableRelayConfigSchema.partial().optional(),
     mcp: z.object({ injectIntoAgents: z.boolean().optional() }).passthrough().optional(),
     browserTools: MutableBrowserToolsConfigSchema.partial().optional(),
+    speech: MutableSpeechConfigSchema.partial().optional(),
     providers: z
       .record(z.string(), MutableDaemonProviderConfigSchema.partial().passthrough())
       .optional(),

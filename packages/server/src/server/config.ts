@@ -797,7 +797,7 @@ function resolveLogOverrideControlledPaths(env: NodeJS.ProcessEnv): string[] {
 
 function isEnabledSpeechProvider(
   provider: RequestedSpeechProviders[keyof RequestedSpeechProviders],
-  expected: "local" | "openai",
+  expected: "local" | "openai" | "soniox",
 ): boolean {
   return provider.enabled !== false && provider.provider === expected;
 }
@@ -841,6 +841,12 @@ function resolveSpeechOverrideControlledPaths(
   add("PASEO_VOICE_LOCAL_TTS_SPEAKER_ID", "features.voiceMode.tts.speakerId");
   add("PASEO_VOICE_LOCAL_TTS_SPEED", "features.voiceMode.tts.speed");
   add("PASEO_LOCAL_MODELS_DIR", "providers.local.modelsDir");
+  add("SONIOX_API_KEY", "providers.soniox.apiKey");
+  add("PASEO_SONIOX_API_KEY", "providers.soniox.apiKey");
+  add("SONIOX_STT_MODEL", "providers.soniox.model");
+  add("PASEO_SONIOX_STT_MODEL", "providers.soniox.model");
+  add("SONIOX_LANGUAGE_HINTS", "providers.soniox.languageHints");
+  add("PASEO_SONIOX_LANGUAGE_HINTS", "providers.soniox.languageHints");
   const openAiDictationStt = isEnabledSpeechProvider(providers.dictationStt, "openai");
   const openAiVoiceStt = isEnabledSpeechProvider(providers.voiceStt, "openai");
   if (env.STT_CONFIDENCE_THRESHOLD !== undefined && (openAiDictationStt || openAiVoiceStt)) {
