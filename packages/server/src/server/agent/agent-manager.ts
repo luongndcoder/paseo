@@ -80,7 +80,10 @@ import {
 } from "./agent-run-state.js";
 import { invokeRewindCapability, type RewindMode } from "./rewind/rewind.js";
 import { projectAgentMessage } from "./agent-messages/index.js";
-import { isStaleProviderSessionError } from "./stale-provider-session-error.js";
+import {
+  StaleProviderSessionError,
+  isStaleProviderSessionError,
+} from "./stale-provider-session-error.js";
 import { stripInternalPaseoMcpServer, withRuntimePaseoMcpServer } from "./runtime-mcp-config.js";
 import { resolveCreateAgentTitles } from "./create-agent-title.js";
 import type { PaseoToolCatalogFactory } from "./tools/types.js";
@@ -93,7 +96,8 @@ import {
 import { withTimeout } from "../../utils/promise-timeout.js";
 import { extractAttention } from "../persistence-hooks.js";
 
-const RELOAD_SESSION_CLOSE_TIMEOUT_MS = 3_000;
+const RELOAD_SESSION_CLOSE_TIMEOUT_MS = 10_000;
+const RELOAD_SESSION_CLOSE_TIMEOUT_ERROR = "Timed out closing previous session during refresh";
 const INTERRUPT_SESSION_TIMEOUT_MS = 2_000;
 const IMPORTABLE_SESSION_LIST_TIMEOUT_MS = 90_000;
 const STORED_AGENT_CAPABILITIES: AgentCapabilityFlags = {
@@ -109,6 +113,15 @@ const STORED_AGENT_CAPABILITIES: AgentCapabilityFlags = {
 };
 
 type TimeoutResult = "completed" | "timed_out";
+
+function isClosedProviderSessionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\bsession is closed$/i.test(message.trim());
+}
+
+function stripTransientReloadError(lastError: string | undefined): string | undefined {
+  return lastError === RELOAD_SESSION_CLOSE_TIMEOUT_ERROR ? undefined : lastError;
+}
 
 function submittedPromptText(prompt: AgentPromptInput): string {
   if (typeof prompt === "string") {
@@ -1558,7 +1571,7 @@ export class AgentManager {
     const rehydrateFromDisk = options?.rehydrateFromDisk ?? false;
     const preservedHistoryPrimed = existing.historyPrimed;
     const preservedLastUsage = existing.lastUsage;
-    const preservedLastError = existing.lastError;
+    const preservedLastError = stripTransientReloadError(existing.lastError);
     const preservedAttention = existing.attention;
     const handle = existing.persistence;
     const provider = handle?.provider ?? existing.provider;
@@ -1675,7 +1688,7 @@ export class AgentManager {
       },
     });
     if (result === "timed_out") {
-      throw new Error("Timed out closing previous session during refresh");
+      throw new Error(RELOAD_SESSION_CLOSE_TIMEOUT_ERROR);
     }
   }
 
@@ -2541,6 +2554,9 @@ export class AgentManager {
   }): Promise<string> {
     const { agent, agentId, pendingRun, prompt, options } = params;
     try {
+      if (this.reloadedSessionCloses.has(agent.session)) {
+        throw new StaleProviderSessionError(agent.persistence?.sessionId ?? agentId);
+      }
       const result = await agent.session.startTurn(prompt, options);
       if (pendingRun.settled) {
         throw new Error(`Agent ${agentId} run was canceled before its turn started`);
@@ -2550,12 +2566,18 @@ export class AgentManager {
       if (pendingRun.settled) {
         throw error;
       }
-      if (isStaleProviderSessionError(error)) {
-        pendingRun.start = { status: "failed", error: error.message };
+      const normalizedError =
+        !isStaleProviderSessionError(error) &&
+        isClosedProviderSessionError(error) &&
+        (Boolean(agent.persistence) || this.reloadedSessionCloses.has(agent.session))
+          ? new StaleProviderSessionError(agent.persistence?.sessionId ?? agentId)
+          : error;
+      if (isStaleProviderSessionError(normalizedError)) {
+        pendingRun.start = { status: "failed", error: normalizedError.message };
         agent.pendingReplacement = false;
         if (!agent.activeForegroundTurnId) agent.lifecycle = "idle";
         this.runs.settleForegroundRun(agentId, pendingRun.token);
-        throw error;
+        throw normalizedError;
       }
       agent.pendingReplacement = false;
       const errorMsg = error instanceof Error ? error.message : "Failed to start turn";

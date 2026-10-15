@@ -2385,9 +2385,11 @@ class ClaudeAgentSession implements AgentSession {
         provider: "claude",
         reason: "Interrupted",
       });
-      void this.interruptActiveTurn(claudeStartedTurn).catch((error) => {
-        this.logger.warn({ err: error }, "Failed to interrupt during cancel");
-      });
+      if (!this.closed) {
+        void this.interruptActiveTurn(claudeStartedTurn).catch((error) => {
+          this.logger.warn({ err: error }, "Failed to interrupt during cancel");
+        });
+      }
     };
     this.cancelCurrentTurn = requestCancel;
 
@@ -2826,7 +2828,6 @@ class ClaudeAgentSession implements AgentSession {
     this.taskProtocolSource.reset();
     this.input?.end();
     this.query?.close?.();
-    await this.awaitWithTimeout(this.query?.interrupt?.(), "close query interrupt");
     await this.awaitWithTimeout(this.query?.return?.(), "close query return");
     this.query = null;
     this.input = null;

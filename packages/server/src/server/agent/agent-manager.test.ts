@@ -3979,6 +3979,103 @@ test("a prompt after provider replacement reopens the stale session", async () =
   }
 });
 
+test("a prompt after a timed-out reload close automatically reloads and recovers instead of emitting session is closed", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-closed-after-reload-timeout-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const provider = "claude";
+  let releaseClose!: () => void;
+  const closeGate = new Promise<void>((resolve) => {
+    releaseClose = resolve;
+  });
+
+  class SlowClosingClaudeSession extends TestAgentSession {
+    private closedState = false;
+
+    override async startTurn(
+      prompt: AgentPromptInput,
+      options?: AgentRunOptions,
+    ): Promise<{ turnId: string }> {
+      if (this.closedState) {
+        throw new Error("Claude session is closed");
+      }
+      return super.startTurn(prompt, options);
+    }
+
+    override async close(): Promise<void> {
+      this.closedState = true;
+      await closeGate;
+      await super.close();
+    }
+  }
+
+  const replacement = new ResumeTrackingTestAgentClient(provider);
+  class SlowClosingClient extends TestAgentClient {
+    constructor() {
+      super(provider);
+    }
+
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      const session = new SlowClosingClaudeSession(config);
+      session.describePersistence = () => ({ provider, sessionId: "claude-persisted-session" });
+      return session;
+    }
+
+    override async resumeSession(
+      handle: AgentPersistenceHandle,
+      overrides?: Partial<AgentSessionConfig>,
+    ): Promise<AgentSession> {
+      return replacement.resumeSession(handle, overrides);
+    }
+  }
+
+  const manager = new AgentManager({
+    clients: { [provider]: new SlowClosingClient() },
+    providerDefinitions: { [provider]: { enabled: true } },
+    registry: storage,
+    logger,
+    rescueTimeouts: { reloadSessionCloseMs: 10 },
+  });
+  const created = await manager.createAgent({ provider, cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+
+  try {
+    await expect(manager.reloadAgentSession(created.id)).rejects.toThrow(
+      "Timed out closing previous session during refresh",
+    );
+    releaseClose();
+
+    const dispatch = await startAgentRun(
+      manager,
+      created.id,
+      "continue after account switch",
+      logger,
+      {
+        runOptions: { clientMessageId: "closed-session-auto-reload" },
+      },
+    );
+    expect(dispatch.disposition).toBe("turn_started");
+    await replacement.waitForRetryStart();
+    const result = await manager.waitForAgentEvent(created.id);
+    expect(result.status).toBe("idle");
+    expect(manager.getAgent(created.id)?.lastError).toBeUndefined();
+    expect(replacement.resumeOverrides).toHaveLength(1);
+    const timeline = manager.getTimeline(created.id);
+    expect(
+      timeline.some(
+        (item) =>
+          item.type === "assistant_message" && item.text.includes("Claude session is closed"),
+      ),
+    ).toBe(false);
+  } finally {
+    releaseClose();
+    await manager.closeAgent(created.id).catch(() => undefined);
+    await manager.flush().catch(() => undefined);
+    await storage.flush().catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("a replacement prompt recovers when the retired session fails to start", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-stale-replacement-"));
   const storage = new AgentStorage(join(workdir, "agents"), logger);
