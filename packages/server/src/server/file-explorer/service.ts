@@ -818,8 +818,28 @@ async function resolveScopedPath({
     assertWithinWorkspace(canonicalRoot, canonicalPath);
     return { requestedPath, resolvedPath: canonicalPath };
   } catch (error) {
-    if (isMissingEntryError(error)) return { requestedPath, resolvedPath: requestedPath };
-    throw error;
+    if (!isMissingEntryError(error)) throw error;
+    // The target does not resolve. Canonicalize the deepest existing ancestor so a
+    // symlinked ancestor cannot smuggle a missing/dangling tail outside the workspace.
+    const anticipatedPath = await canonicalizeDeepestExistingAncestor(requestedPath);
+    assertWithinWorkspace(canonicalRoot, anticipatedPath);
+    return { requestedPath, resolvedPath: requestedPath };
+  }
+}
+
+async function canonicalizeDeepestExistingAncestor(targetPath: string): Promise<string> {
+  const remaining: string[] = [];
+  let current = targetPath;
+  for (;;) {
+    try {
+      return path.join(await fs.realpath(current), ...remaining);
+    } catch (error) {
+      if (!isMissingEntryError(error)) throw error;
+      const parent = path.dirname(current);
+      if (parent === current) return targetPath;
+      remaining.unshift(path.basename(current));
+      current = parent;
+    }
   }
 }
 
