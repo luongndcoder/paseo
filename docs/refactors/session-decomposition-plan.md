@@ -21,6 +21,7 @@ The first carves shipped as **deep modules with a narrow Host seam**, not the `d
 - **#1644 — CheckoutSession, read side** (`session/checkout/checkout-session.ts`, seam `CheckoutSessionHost`, port `CheckoutDiffSubscriber`): status, branch validate/suggest, diff subscribe/unsubscribe, manual refresh. The workspace-git observer already delegates `emitStatusUpdate`/`scheduleDiffRefresh` to it.
 - **Slice 3 — observer seams:** workspace-git observer service with injected callbacks, and the agent-subscribe callback split into named handlers (see Slice 3).
 - **Slice 5 (partial) — WorkspaceLabelSession** (`session/workspace-labels/workspace-label-session.ts`, seam `WorkspaceLabelSessionHost`): the five `workspace.label.*` handlers incl. the owned live subscription. The rest of Slice 5 (the `workspaceUpdatesSubscription` state machine, fetch_workspaces, descriptor building, archive/restore) is still inline in `session.ts` and needs its own carve; it is tightly coupled to `agentUpdatesSubscription` and the git observer.
+- **Slice 8a — AgentConfigSession** (`session/agent-config/agent-config-session.ts`, seam `AgentConfigSessionHost` + `AgentConfigOperations`): the four `set_agent_*` setters and `agent.config.apply` share one `applyConfigChange` envelope, with per-setter failure tests (`activity_log` error frame before the rejected response). `list_commands_request` was re-homed here from `dispatchMiscMessage`; the shell adapts command-source resolution and draft listing through `AgentConfigOperations`.
 - **ScheduleSession** (`session/schedule/schedule-session.ts`, seam `ScheduleSessionHost`): scheduled-agent request handling.
 
 **Next carve — CheckoutSession mutation side (Slice 4 below).** The 17 checkout _write_ handlers still inline in `session.ts` (`dispatchCheckoutMessage`, ~2010) — branch switch/rename, commit, merge, merge-from-base, pull, push, PR create/merge, github set-auto-merge/get-check-details, PR status, PR timeline, github search, stash save/pop/list — move into the existing `session/checkout/checkout-session.ts` behind `CheckoutSessionHost`. The Slice-3 observer entanglement the table fears is already resolved: #1644 moved the status/diff read side into CheckoutSession, so the workspace observer delegates today and this no longer blocks on the WorkspaceController split.
@@ -105,9 +106,9 @@ In-place, separately reviewable. Split the `audio_output` TTS-debug branch out o
 
 ---
 
-## Slice 8a — Agent-lifecycle config setters
+## Slice 8a — Agent-lifecycle config setters (shipped)
 
-Parameterize the 4 setter envelopes `handleSetAgentMode/Model/Feature/Thinking` (4209-4390) into one helper; re-home `handleListCommandsRequest` (misfiled in `dispatchMiscMessage`). Add a handleMessage-driven **failure** test per setter (force the command to reject, assert both the `*_response{accepted:false}` AND the `activity_log` error frame in order) BEFORE collapsing. **Tests:** `session.test.ts`, `session.lifecycle-boundary.test.ts`.
+See Progress. Tests: `agent-config-session.test.ts`, `session.test.ts`, `session.lifecycle-boundary.test.ts`.
 
 ## Slice 8b — AgentLifecycleController (XL, LAST)
 

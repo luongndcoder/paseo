@@ -1038,6 +1038,31 @@ export class Session {
           agentManager.setAgentFeature(agentId, featureId, value),
         setThinking: (agentId, thinkingOptionId) =>
           agentManager.setAgentThinkingOption(agentId, thinkingOptionId),
+        resolveCommandSource: async (agentId) => {
+          const existing = agentManager.getAgent(agentId);
+          const stored = existing ? null : await agentStorage.get(agentId);
+          const agent =
+            existing || (stored && !stored.archivedAt)
+              ? await ensureAgentLoaded(agentId, {
+                  agentManager,
+                  agentStorage,
+                  logger: this.sessionLogger,
+                })
+              : null;
+          const session = agent?.session;
+          const listCommands = session?.listCommands?.bind(session);
+          return { found: agent !== null, ...(listCommands ? { listCommands } : {}) };
+        },
+        listDraftCommands: (draftConfig) =>
+          agentManager.listDraftCommands({
+            provider: draftConfig.provider,
+            cwd: expandTilde(draftConfig.cwd),
+            ...(draftConfig.modeId ? { modeId: draftConfig.modeId } : {}),
+            ...(draftConfig.model ? { model: draftConfig.model } : {}),
+            ...(draftConfig.thinkingOptionId
+              ? { thinkingOptionId: draftConfig.thinkingOptionId }
+              : {}),
+          }),
       },
       logger: this.sessionLogger,
     });
@@ -2836,6 +2861,8 @@ export class Session {
         return this.agentConfigSession.handleSetAgentThinkingRequest(msg);
       case "agent.config.apply.request":
         return this.agentConfigSession.handleAgentConfigApplyRequest(msg);
+      case "list_commands_request":
+        return this.agentConfigSession.handleListCommandsRequest(msg);
       case "get_daemon_config_request":
         this.emit({
           type: "get_daemon_config_response",
@@ -3129,9 +3156,6 @@ export class Session {
 
   private async dispatchMiscMessage(msg: SessionInboundMessage): Promise<void> {
     switch (msg.type) {
-      case "list_commands_request":
-        await this.handleListCommandsRequest(msg);
-        return;
       case "register_push_token":
         this.handleRegisterPushToken(msg.token);
         return;
@@ -5023,91 +5047,6 @@ export class Session {
     this.currentClientMetadata().pushToken = token;
     this.pushNotifications.renew(token);
     this.sessionLogger.info("Registered push token");
-  }
-
-  /**
-   * Handle list commands request for an agent
-   */
-  private async handleListCommandsRequest(
-    msg: Extract<SessionInboundMessage, { type: "list_commands_request" }>,
-  ): Promise<void> {
-    const { agentId, requestId, draftConfig } = msg;
-    this.sessionLogger.debug(
-      { agentId, draftConfig },
-      `Handling list commands request for agent ${agentId}`,
-    );
-
-    try {
-      const existing = this.agentManager.getAgent(agentId);
-      const stored = existing ? null : await this.agentStorage.get(agentId);
-      const agent =
-        existing || (stored && !stored.archivedAt)
-          ? await ensureAgentLoaded(agentId, {
-              agentManager: this.agentManager,
-              agentStorage: this.agentStorage,
-              logger: this.sessionLogger,
-            })
-          : null;
-
-      if (agent?.session?.listCommands) {
-        const commands = await agent.session.listCommands();
-        this.emit({
-          type: "list_commands_response",
-          payload: {
-            agentId,
-            commands,
-            error: null,
-            requestId,
-          },
-        });
-        return;
-      }
-
-      if (!agent && draftConfig) {
-        const sessionConfig: AgentSessionConfig = {
-          provider: draftConfig.provider,
-          cwd: expandTilde(draftConfig.cwd),
-          ...(draftConfig.modeId ? { modeId: draftConfig.modeId } : {}),
-          ...(draftConfig.model ? { model: draftConfig.model } : {}),
-          ...(draftConfig.thinkingOptionId
-            ? { thinkingOptionId: draftConfig.thinkingOptionId }
-            : {}),
-        };
-
-        const commands = await this.agentManager.listDraftCommands(sessionConfig);
-        this.emit({
-          type: "list_commands_response",
-          payload: {
-            agentId,
-            commands,
-            error: null,
-            requestId,
-          },
-        });
-        return;
-      }
-
-      this.emit({
-        type: "list_commands_response",
-        payload: {
-          agentId,
-          commands: [],
-          error: agent ? `Agent does not support listing commands` : `Agent not found: ${agentId}`,
-          requestId,
-        },
-      });
-    } catch (error) {
-      this.sessionLogger.error({ err: error, agentId, draftConfig }, "Failed to list commands");
-      this.emit({
-        type: "list_commands_response",
-        payload: {
-          agentId,
-          commands: [],
-          error: getErrorMessage(error),
-          requestId,
-        },
-      });
-    }
   }
 
   /**
