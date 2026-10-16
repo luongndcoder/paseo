@@ -51,18 +51,9 @@ import { SortablePager, type SortSpec } from "./pagination/sortable-pager.js";
 import { matchesAgentHistoryQuery } from "./agent-history-search.js";
 import type { SpeechToTextProvider, TextToSpeechProvider } from "./speech/speech-provider.js";
 import type { TurnDetectionProvider } from "./speech/turn-detection-provider.js";
-import {
-  buildConfigOverrides,
-  isStoredAgentProviderAvailable,
-  resolveStoredAgentUpdatedAt,
-  toAgentPersistenceHandle,
-} from "./persistence-hooks.js";
+import { isStoredAgentProviderAvailable } from "./persistence-hooks.js";
 import { ensureAgentLoaded, ensureUnarchivedAgentLoaded } from "./agent/agent-loading.js";
-import {
-  sendPromptToAgent,
-  waitForAgentRunStartWithTimeout,
-  unarchiveAgentState,
-} from "./agent/agent-prompt.js";
+import { sendPromptToAgent, waitForAgentRunStartWithTimeout } from "./agent/agent-prompt.js";
 import {
   resolveCreateAgentTitles,
   resolveFirstAgentPromptTitle,
@@ -118,7 +109,6 @@ import { createAgentCommand } from "./agent/create-agent/create.js";
 import { resolveCreateAgentIntent, type CreateAgentIntent } from "./agent/create-agent/intent.js";
 import {
   archiveAgentCommand,
-  cancelAgentRunCommand,
   closeAgentCommand,
   detachAgentCommand,
   setAgentModeCommand,
@@ -136,7 +126,6 @@ import { buildAgentPrompt } from "./agent/prompt-attachments.js";
 import type { StructuredGenerationDaemonConfig } from "./agent/structured-generation-providers.js";
 import {
   getAgentStreamEventTurnId,
-  type AgentPersistenceHandle,
   type AgentPermissionResponse,
   type AgentRunOptions,
   type AgentSessionConfig,
@@ -145,9 +134,7 @@ import type { StoredAgentRecord } from "./agent/agent-storage.js";
 import type { AgentStorage } from "./agent/agent-storage.js";
 import {
   ImportSessionsRequestError,
-  importProviderSession,
   listImportableProviderSessions,
-  normalizeImportAgentRequest,
 } from "./agent/import-sessions.js";
 import {
   checkoutLiteFromGitSnapshot,
@@ -188,6 +175,7 @@ import { ProviderCatalogSession } from "./session/provider/provider-catalog-sess
 import { UsageSession } from "./session/usage/usage-session.js";
 import { WorkspaceFilesSession } from "./session/files/workspace-files-session.js";
 import { AgentConfigSession } from "./session/agent-config/agent-config-session.js";
+import { AgentLifecycleSession } from "./session/agent-lifecycle/agent-lifecycle-session.js";
 import { WorkspaceLabelSession } from "./session/workspace-labels/workspace-label-session.js";
 import { ProjectConfigSession } from "./session/project-config/project-config-session.js";
 import { DaemonSession, type DaemonRuntimeConfig } from "./session/daemon/daemon-session.js";
@@ -799,6 +787,7 @@ export class Session {
   private readonly usageSession: UsageSession;
   private readonly workspaceFilesSession: WorkspaceFilesSession;
   private readonly agentConfigSession: AgentConfigSession;
+  private readonly agentLifecycleSession: AgentLifecycleSession;
   private readonly projectConfigSession: ProjectConfigSession;
   private readonly daemonSession: DaemonSession;
   private readonly hubExecutionController: HubExecutionController | null;
@@ -1017,6 +1006,25 @@ export class Session {
     this.usageSession = new UsageSession({
       emit: (msg) => this.emit(msg),
       runtime: pluginRuntime,
+      logger: this.sessionLogger,
+    });
+    this.agentLifecycleSession = new AgentLifecycleSession({
+      host: {
+        emit: (msg) => this.emit(msg),
+        forwardLiveAgent: (agent) => this.agentUpdates.forwardLiveAgent(agent),
+        buildAgentPayload: (agent) => this.buildAgentPayload(agent),
+        registerWorkspaceForImportedAgent: (workspace) =>
+          this.registerWorkspaceForImportedAgent(workspace),
+        restoreOwningWorkspaceForLegacyAgentRefresh: (agentId) =>
+          this.restoreOwningWorkspaceForLegacyAgentRefresh(agentId),
+        interruptAgentIfRunning: (agentId) => this.interruptAgentIfRunning(agentId),
+        handleAgentRunError: (agentId, error, context) =>
+          this.handleAgentRunError(agentId, error, context),
+        listRegisteredProviderIds: () => this.providerSnapshotManager.listRegisteredProviderIds(),
+      },
+      agentManager,
+      agentStorage,
+      workspaceProvisioning: this.workspaceProvisioning,
       logger: this.sessionLogger,
     });
     this.agentConfigSession = new AgentConfigSession({
@@ -2833,13 +2841,13 @@ export class Session {
       case "create_agent_request":
         return this.handleCreateAgentRequest(msg);
       case "resume_agent_request":
-        return this.handleResumeAgentRequest(msg);
+        return this.agentLifecycleSession.handleResumeAgentRequest(msg);
       case "import_agent_request":
-        return this.handleImportAgentRequest(msg);
+        return this.agentLifecycleSession.handleImportAgentRequest(msg);
       case "refresh_agent_request":
-        return this.handleRefreshAgentRequest(msg);
+        return this.agentLifecycleSession.handleRefreshAgentRequest(msg);
       case "cancel_agent_request":
-        return this.handleCancelAgentRequest(msg.agentId, msg.requestId);
+        return this.agentLifecycleSession.handleCancelAgentRequest(msg.agentId, msg.requestId);
       case "agent_permission_response":
         return this.handleAgentPermissionResponse(msg.agentId, msg.requestId, msg.response);
       case "clear_agent_attention":
@@ -3422,42 +3430,6 @@ export class Session {
         requestId: msg.requestId,
       },
     });
-  }
-
-  private async unarchiveAgentByHandle(handle: AgentPersistenceHandle): Promise<{
-    record: StoredAgentRecord;
-    didUnarchive: boolean;
-    originalArchivedAt: string | null;
-  } | null> {
-    const records = await this.agentStorage.listByProviderSession(
-      handle.provider,
-      handle.sessionId,
-    );
-    const matched = records.reduce<StoredAgentRecord | null>((latest, candidate) => {
-      if (!latest) {
-        return candidate;
-      }
-      const updatedDelta =
-        Date.parse(resolveStoredAgentUpdatedAt(candidate)) -
-        Date.parse(resolveStoredAgentUpdatedAt(latest));
-      if (updatedDelta !== 0) {
-        return updatedDelta > 0 ? candidate : latest;
-      }
-      return Date.parse(candidate.createdAt) > Date.parse(latest.createdAt) ? candidate : latest;
-    }, null);
-    if (!matched) {
-      return null;
-    }
-    const didUnarchive = await unarchiveAgentState(
-      this.agentStorage,
-      this.agentManager,
-      matched.id,
-    );
-    return {
-      record: matched,
-      didUnarchive,
-      originalArchivedAt: matched.archivedAt ?? null,
-    };
   }
 
   private async handleUpdateAgentRequest(
@@ -4504,286 +4476,6 @@ export class Session {
       intent,
       createdDirectoryWorkspace: !createdWorktree && !request.workspaceId && !callerAgent,
     };
-  }
-
-  private async handleResumeAgentRequest(
-    msg: Extract<SessionInboundMessage, { type: "resume_agent_request" }>,
-  ): Promise<void> {
-    const { handle, overrides, requestId } = msg;
-    if (!handle) {
-      this.sessionLogger.warn("Resume request missing persistence handle");
-      if (requestId) {
-        this.emit({
-          type: "rpc_error",
-          payload: {
-            requestId,
-            requestType: msg.type,
-            error: "Unable to resume agent: missing persistence handle",
-            code: "agent_resume_failed",
-          },
-        });
-      }
-      this.emit({
-        type: "activity_log",
-        payload: {
-          id: uuidv4(),
-          timestamp: new Date(),
-          type: "error",
-          content: "Unable to resume agent: missing persistence handle",
-        },
-      });
-      return;
-    }
-    this.sessionLogger.info(
-      { sessionId: handle.sessionId, provider: handle.provider },
-      `Resuming agent ${handle.sessionId} (${handle.provider})`,
-    );
-    try {
-      const matched = await this.unarchiveAgentByHandle(handle);
-      const effectiveOverrides = matched
-        ? { ...buildConfigOverrides(matched.record), ...overrides }
-        : overrides;
-      let snapshot: ManagedAgent;
-      try {
-        snapshot = await this.agentManager.resumeAgentFromPersistence(handle, effectiveOverrides);
-      } catch (error) {
-        if (matched?.didUnarchive && matched.originalArchivedAt) {
-          await this.agentManager.archiveSnapshot(matched.record.id, matched.originalArchivedAt);
-        }
-        throw error;
-      }
-      await unarchiveAgentState(this.agentStorage, this.agentManager, snapshot.id);
-      await this.agentManager.hydrateTimelineFromProvider(snapshot.id);
-      await this.agentUpdates.forwardLiveAgent(snapshot);
-      const timelineSize = this.agentManager.getTimeline(snapshot.id).length;
-      if (requestId) {
-        const agentPayload = await this.buildAgentPayload(snapshot);
-        this.emit({
-          type: "status",
-          payload: {
-            status: "agent_resumed",
-            agentId: snapshot.id,
-            requestId,
-            timelineSize,
-            agent: agentPayload,
-          },
-        });
-      }
-    } catch (error) {
-      const message = getErrorMessage(error);
-      this.sessionLogger.error({ err: error }, "Failed to resume agent");
-      if (requestId) {
-        this.emit({
-          type: "rpc_error",
-          payload: {
-            requestId,
-            requestType: msg.type,
-            error: message,
-            code: "agent_resume_failed",
-          },
-        });
-      }
-      this.emit({
-        type: "activity_log",
-        payload: {
-          id: uuidv4(),
-          timestamp: new Date(),
-          type: "error",
-          content: `Failed to resume agent: ${message}`,
-        },
-      });
-    }
-  }
-
-  private async handleImportAgentRequest(
-    msg: Extract<SessionInboundMessage, { type: "import_agent_request" }>,
-  ): Promise<void> {
-    const normalized = normalizeImportAgentRequest(msg);
-    if ("error" in normalized) {
-      this.emit({
-        type: "status",
-        payload: {
-          status: "agent_create_failed",
-          requestId: msg.requestId,
-          error: normalized.error,
-        },
-      });
-      return;
-    }
-    const { provider, providerHandleId, requestId } = normalized;
-    this.sessionLogger.info(
-      { providerHandleId, provider },
-      `Importing agent ${providerHandleId} (${provider})`,
-    );
-
-    try {
-      if (!normalized.cwd) {
-        throw new Error("Import requires cwd from the selected provider session");
-      }
-      const { snapshot, timelineSize, createdWorkspace } = await importProviderSession({
-        request: normalized,
-        workspaceProvisioning: this.workspaceProvisioning,
-        agentManager: this.agentManager,
-        agentStorage: this.agentStorage,
-        logger: this.sessionLogger,
-      });
-      if (createdWorkspace) {
-        await this.registerWorkspaceForImportedAgent(createdWorkspace);
-      }
-      const agentPayload = await this.buildAgentPayload(snapshot);
-      this.emit({
-        type: "status",
-        payload: {
-          status: "agent_resumed",
-          agentId: snapshot.id,
-          requestId,
-          timelineSize,
-          agent: agentPayload,
-        },
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.sessionLogger.error({ err: error }, "Failed to import agent");
-      this.emit({
-        type: "status",
-        payload: {
-          status: "agent_create_failed",
-          requestId,
-          error: message,
-        },
-      });
-      this.emit({
-        type: "activity_log",
-        payload: {
-          id: uuidv4(),
-          timestamp: new Date(),
-          type: "error",
-          content: `Failed to import agent: ${message}`,
-        },
-      });
-    }
-  }
-
-  private async handleRefreshAgentRequest(
-    msg: Extract<SessionInboundMessage, { type: "refresh_agent_request" }>,
-  ): Promise<void> {
-    const { agentId, requestId } = msg;
-    this.sessionLogger.info({ agentId }, `Refreshing agent ${agentId} from persistence`);
-
-    try {
-      await this.restoreOwningWorkspaceForLegacyAgentRefresh(agentId);
-      await unarchiveAgentState(this.agentStorage, this.agentManager, agentId);
-      let snapshot: ManagedAgent;
-      const existing = this.agentManager.getAgent(agentId);
-      if (existing) {
-        await this.interruptAgentIfRunning(agentId);
-        snapshot = await this.agentManager.reloadAgentSession(agentId, undefined, {
-          rehydrateFromDisk: true,
-        });
-      } else {
-        const record = await this.agentStorage.get(agentId);
-        if (!record) {
-          throw new Error(`Agent not found: ${agentId}`);
-        }
-        const registeredProviderIds = this.providerSnapshotManager.listRegisteredProviderIds();
-        if (!isStoredAgentProviderAvailable(record, registeredProviderIds)) {
-          throw new Error(`Agent ${agentId} references unavailable provider '${record.provider}'`);
-        }
-        if (!toAgentPersistenceHandle(registeredProviderIds, record.persistence)) {
-          throw new Error(`Agent ${agentId} cannot be refreshed because it lacks persistence`);
-        }
-        // Share the loader's per-agent in-flight operation with timeline fetches.
-        // Unarchiving publishes the record before provider resume finishes, so
-        // the agent pane can otherwise race this request and resume it twice.
-        snapshot = await ensureAgentLoaded(agentId, {
-          agentManager: this.agentManager,
-          agentStorage: this.agentStorage,
-          broadcastTimeline: true,
-          logger: this.sessionLogger,
-        });
-      }
-      await this.agentManager.hydrateTimelineFromProvider(agentId, { broadcast: true });
-      await this.agentUpdates.forwardLiveAgent(snapshot);
-      const timelineSize = this.agentManager.getTimeline(agentId).length;
-      if (requestId) {
-        this.emit({
-          type: "status",
-          payload: {
-            status: "agent_refreshed",
-            agentId,
-            requestId,
-            timelineSize,
-          },
-        });
-      }
-    } catch (error) {
-      const message = getErrorMessage(error);
-      this.sessionLogger.error({ err: error, agentId }, `Failed to refresh agent ${agentId}`);
-      if (requestId) {
-        this.emit({
-          type: "rpc_error",
-          payload: {
-            requestId,
-            requestType: msg.type,
-            error: message,
-            code: error instanceof WorktreeRequestError ? error.code : "agent_refresh_failed",
-          },
-        });
-      }
-      this.emit({
-        type: "activity_log",
-        payload: {
-          id: uuidv4(),
-          timestamp: new Date(),
-          type: "error",
-          content: `Failed to refresh agent: ${message}`,
-        },
-      });
-    }
-  }
-
-  private async handleCancelAgentRequest(agentId: string, requestId?: string): Promise<void> {
-    this.sessionLogger.info({ agentId }, `Cancel request received for agent ${agentId}`);
-
-    try {
-      await cancelAgentRunCommand(
-        { agentManager: this.agentManager, logger: this.sessionLogger },
-        agentId,
-      );
-      if (requestId) {
-        const agent = this.agentManager.getAgent(agentId);
-        const payload = agent ? await this.buildAgentPayload(agent) : null;
-        this.emit({
-          type: "cancel_agent_response",
-          payload: {
-            requestId,
-            agentId,
-            agent: payload,
-            error: null,
-          },
-        });
-      }
-    } catch (error) {
-      if (requestId) {
-        this.sessionLogger.error(
-          { err: error, agentId },
-          `Failed to cancel running agent on request for agent ${agentId}`,
-        );
-        const agent = this.agentManager.getAgent(agentId);
-        const payload = agent ? await this.buildAgentPayload(agent) : null;
-        this.emit({
-          type: "cancel_agent_response",
-          payload: {
-            requestId,
-            agentId,
-            agent: payload,
-            error: errorToFriendlyMessage(error),
-          },
-        });
-      } else {
-        this.handleAgentRunError(agentId, error, "Failed to cancel running agent on request");
-      }
-    }
   }
 
   private async handleAgentRewindRequest(
