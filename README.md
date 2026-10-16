@@ -6,13 +6,13 @@
 
 <p align="center">
   <a href="README.md">English</a> ·
-  <a href="SETUP_NEW_MACHINE.md"><strong>🇻🇳 Hướng dẫn cài đặt máy mới (Vietnamese Voice + PyCharm Git + SLP)</strong></a> ·
+  <a href="SETUP_NEW_MACHINE.md"><strong>🇻🇳 Hướng dẫn cài đặt máy mới (Vietnamese Voice + NDL-Git + SLP)</strong></a> ·
   <a href="README.zh-CN.md">简体中文</a> ·
   <a href="README.ja.md">日本語</a> ·
   <a href="README.ko.md">한국어</a>
 </p>
 
-> **Bản Fork Cá Nhân (`luongndcoder/paseo`)**: Tích hợp nhận diện giọng nói tiếng Việt offline (`sherpa-onnx`), bộ công cụ Git chuẩn PyCharm (`Cmd + 9`), PlantUML preview, ZeroSub (`luongndcoder/zerosub`), và hệ thống điều phối đa tác tử **SLP (`luongndcoder/paseo-slp`)**.
+> **Bản Fork Cá Nhân (`luongndcoder/paseo`)**: Tích hợp nhận diện giọng nói tiếng Việt offline (`sherpa-onnx`), bộ công cụ NDL-Git trực quan (`ndl-git`, phím tắt `Cmd + 9`), PlantUML preview, ZeroSub (`luongndcoder/zerosub`), và hệ thống điều phối đa tác tử **SLP (`luongndcoder/paseo-slp`)**.
 > 👉 Xem hướng dẫn cài đặt trọn bộ từ đầu cho máy mới tại **[SETUP_NEW_MACHINE.md](SETUP_NEW_MACHINE.md)** hoặc chạy `bash scripts/setup-new-machine.sh`.
 
 <p align="center">
@@ -60,7 +60,7 @@ Paseo is an open source agentic development environment for desktop, mobile, web
 
 ### 1. Paseo Architecture Overview
 
-The diagram below illustrates how client applications (Desktop, Web, Mobile, CLI) connect to the Paseo Daemon via an encrypted WebSocket RPC protocol, coordinating local offline Vietnamese voice transcription, PyCharm Git tools, the extensibility plugin system, and multi-agent systems (SLP, Claude, Codex, Antigravity):
+The diagram below illustrates how client applications (Desktop, Web, Mobile, CLI) connect to the Paseo Daemon via an encrypted WebSocket RPC protocol, coordinating local offline Vietnamese voice transcription, NDL-Git tools (`ndl-git`), the extensibility plugin system, and multi-agent systems (SLP, Claude, Codex, Antigravity):
 
 ```mermaid
 flowchart TD
@@ -85,7 +85,7 @@ flowchart TD
             TTS["Text-to-Speech & Realtime Streaming"]
         end
 
-        subgraph GitEngine["PyCharm Git Engine (Cmd + 9)"]
+        subgraph GitEngine["NDL-Git Engine (Cmd + 9)"]
             GitGraph["Swimlane Commit Graph & Stashes"]
             SplitDiff["Side-by-Side Split Diff & Hunk Staging"]
             MergeResolver["3-Way Conflict Resolver Engine"]
@@ -156,14 +156,14 @@ sequenceDiagram
     Session->>Provider: Launch agent process with repo context
     Provider-->>Daemon: Stream stdout, reasoning chunks & file patches
     Daemon-->>Client: Live streaming response, diffs & log events
-    User->>Client: Open PyCharm Git Tool Window (Cmd + 9) to review diff & merge
+    User->>Client: Open NDL-Git Tool Window (Cmd + 9) to review diff & merge
 ```
 
 ---
 
-### 3. PyCharm Git Tool Window & 3-Way Merge Conflict Resolver
+### 3. NDL-Git Tool Window & 3-Way Merge Conflict Resolver
 
-Visual Git management following JetBrains PyCharm standards integrated directly into Paseo:
+Visual Git management tool (NDL-Git) integrated directly into Paseo:
 
 ```mermaid
 flowchart LR
@@ -173,7 +173,7 @@ flowchart LR
         C["Git Stash Stack (stash@{0})"]
     end
 
-    subgraph PyCharmWindow["PyCharm Git Tool Window (Cmd + 9)"]
+    subgraph NdlGitWindow["NDL-Git Tool Window (Cmd + 9)"]
         Graph["Swimlane Commit Graph<br/>(Branch Tree, Tags, Authors)"]
         Split["Side-by-Side Split Diff<br/>(+ Stage Hunk / ↺ Rollback Hunk)"]
         Conflict["3-Way Conflict Resolver<br/>(Yours | Result | Theirs)"]

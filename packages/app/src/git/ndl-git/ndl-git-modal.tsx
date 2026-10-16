@@ -75,7 +75,7 @@ import {
 import { MergeConflictResolverModal } from "./merge-conflict-resolver-modal";
 import { SplitDiffViewer } from "./split-diff-viewer";
 
-export interface PyCharmGitModalProps {
+export interface NdlGitModalProps {
   visible?: boolean;
   open?: boolean;
   onClose: () => void;
@@ -178,9 +178,9 @@ function CommitRowGraphSvg({
 }
 
 /**
- * Formats commit timestamp in PyCharm's compact tabular style: `8/10/26, 18:27`
+ * Formats commit timestamp in NDL-Git's compact tabular style: `8/10/26, 18:27`
  */
-function formatPyCharmTableDate(isoDate: string): string {
+function formatNdlTableDate(isoDate: string): string {
   try {
     const d = new Date(isoDate);
     if (Number.isNaN(d.getTime())) return isoDate;
@@ -195,7 +195,7 @@ function formatPyCharmTableDate(isoDate: string): string {
   }
 }
 
-function formatPyCharmFullDate(isoDate: string): string {
+function formatNdlFullDate(isoDate: string): string {
   try {
     const d = new Date(isoDate);
     if (Number.isNaN(d.getTime())) return isoDate;
@@ -297,7 +297,7 @@ function groupChangedFilesByDirectory(files: CheckoutCommitFile[]): ChangedFileD
     }));
 }
 
-export function PyCharmGitModal({
+export function NdlGitModal({
   visible: visibleProp,
   open,
   onClose,
@@ -306,7 +306,7 @@ export function PyCharmGitModal({
   initialFilePath = null,
   initialCommitSha = null,
   onOpenCommitTab,
-}: PyCharmGitModalProps) {
+}: NdlGitModalProps) {
   const theme = UnistylesRuntime.getTheme();
   const visible = Boolean(visibleProp ?? open);
   const client = useHostRuntimeClient(serverId);
@@ -333,11 +333,11 @@ export function PyCharmGitModal({
     () => new Set(),
   );
 
-  // Right pane directory grouping state (matches PyCharm top-right file tree)
+  // Right pane directory grouping state (matches NDL-Git top-right file tree)
   const [groupFilesByDir, setGroupFilesByDir] = useState<boolean>(true);
   const [collapsedFileDirs, setCollapsedFileDirs] = useState<Set<string>>(() => new Set());
 
-  // Full-screen PyCharm "Repository Diff" Modal state (`pycharm-ref-2.png`)
+  // Full-screen NDL-Git "Repository Diff" Modal state (`ndl-git-ref-2.png`)
   const [repoDiffModalOpen, setRepoDiffModalOpen] = useState<boolean>(false);
   const [activeHunkIndex, setActiveHunkIndex] = useState<number>(0);
   const lastFileClickRef = useRef<{ path: string; time: number }>({ path: "", time: 0 });
@@ -1088,7 +1088,7 @@ export function PyCharmGitModal({
             setSelectedRef(b.name);
             setAllBranches(false);
           }}
-          testID={`pycharm-git-branch-local-${b.name}`}
+          testID={`ndl-git-branch-local-${b.name}`}
         >
           <Pressable
             onPress={(e) => {
@@ -1123,15 +1123,12 @@ export function PyCharmGitModal({
           ) : null}
         </Pressable>
         {isSelected && !b.isCurrent ? (
-          <View
-            style={styles.inlineBranchActionStrip}
-            testID={`pycharm-git-branch-popup-${b.name}`}
-          >
+          <View style={styles.inlineBranchActionStrip} testID={`ndl-git-branch-popup-${b.name}`}>
             <Pressable
               style={styles.inlineBranchCheckoutBtn}
               disabled={actionBusy}
               onPress={() => void executeGitAction({ kind: "checkout-ref", target: b.name })}
-              testID={`pycharm-git-inline-checkout-${b.name}`}
+              testID={`ndl-git-inline-checkout-${b.name}`}
             >
               <Text style={styles.inlineBranchCheckoutText}>Checkout</Text>
             </Pressable>
@@ -1139,7 +1136,7 @@ export function PyCharmGitModal({
               style={styles.inlineBranchMergeBtn}
               disabled={actionBusy}
               onPress={() => void executeGitAction({ kind: "merge-ref", target: b.name })}
-              testID={`pycharm-git-inline-merge-${b.name}`}
+              testID={`ndl-git-inline-merge-${b.name}`}
             >
               <Text style={styles.inlineBranchMergeText}>Merge into {currentBranch ?? "HEAD"}</Text>
             </Pressable>
@@ -1147,7 +1144,7 @@ export function PyCharmGitModal({
               style={styles.inlineBranchNeutralBtn}
               disabled={actionBusy}
               onPress={() => void executeGitAction({ kind: "rebase-onto", target: b.name })}
-              testID={`pycharm-git-inline-rebase-${b.name}`}
+              testID={`ndl-git-inline-rebase-${b.name}`}
             >
               <Text style={styles.inlineBranchNeutralText}>Rebase</Text>
             </Pressable>
@@ -1158,7 +1155,7 @@ export function PyCharmGitModal({
                 setSelectedStashIndex(null);
                 setSelectedCompareRef((prev) => (prev === b.name ? null : b.name));
               }}
-              testID={`pycharm-git-inline-compare-${b.name}`}
+              testID={`ndl-git-inline-compare-${b.name}`}
             >
               <Text style={styles.inlineBranchNeutralText}>Compare</Text>
             </Pressable>
@@ -1166,7 +1163,7 @@ export function PyCharmGitModal({
               style={styles.inlineBranchDangerBtn}
               disabled={actionBusy}
               onPress={() => void executeGitAction({ kind: "delete-branch", target: b.name })}
-              testID={`pycharm-git-inline-delete-${b.name}`}
+              testID={`ndl-git-inline-delete-${b.name}`}
             >
               <Text style={styles.inlineBranchDangerText}>Delete</Text>
             </Pressable>
@@ -1197,7 +1194,7 @@ export function PyCharmGitModal({
             setSelectedRef(rb.name);
             setAllBranches(false);
           }}
-          testID={`pycharm-git-branch-remote-${rb.name}`}
+          testID={`ndl-git-branch-remote-${rb.name}`}
         >
           <Pressable
             onPress={(e) => {
@@ -1221,15 +1218,12 @@ export function PyCharmGitModal({
           </Text>
         </Pressable>
         {isSelected ? (
-          <View
-            style={styles.inlineBranchActionStrip}
-            testID={`pycharm-git-branch-popup-${rb.name}`}
-          >
+          <View style={styles.inlineBranchActionStrip} testID={`ndl-git-branch-popup-${rb.name}`}>
             <Pressable
               style={styles.inlineBranchCheckoutBtn}
               disabled={actionBusy}
               onPress={() => void executeGitAction({ kind: "checkout-ref", target: rb.name })}
-              testID={`pycharm-git-inline-checkout-${rb.name}`}
+              testID={`ndl-git-inline-checkout-${rb.name}`}
             >
               <Text style={styles.inlineBranchCheckoutText}>Checkout</Text>
             </Pressable>
@@ -1237,7 +1231,7 @@ export function PyCharmGitModal({
               style={styles.inlineBranchMergeBtn}
               disabled={actionBusy}
               onPress={() => void executeGitAction({ kind: "merge-ref", target: rb.name })}
-              testID={`pycharm-git-inline-merge-${rb.name}`}
+              testID={`ndl-git-inline-merge-${rb.name}`}
             >
               <Text style={styles.inlineBranchMergeText}>Merge into {currentBranch ?? "HEAD"}</Text>
             </Pressable>
@@ -1245,7 +1239,7 @@ export function PyCharmGitModal({
               style={styles.inlineBranchNeutralBtn}
               disabled={actionBusy}
               onPress={() => void executeGitAction({ kind: "rebase-onto", target: rb.name })}
-              testID={`pycharm-git-inline-rebase-${rb.name}`}
+              testID={`ndl-git-inline-rebase-${rb.name}`}
             >
               <Text style={styles.inlineBranchNeutralText}>Rebase</Text>
             </Pressable>
@@ -1256,7 +1250,7 @@ export function PyCharmGitModal({
                 setSelectedStashIndex(null);
                 setSelectedCompareRef((prev) => (prev === rb.name ? null : rb.name));
               }}
-              testID={`pycharm-git-inline-compare-${rb.name}`}
+              testID={`ndl-git-inline-compare-${rb.name}`}
             >
               <Text style={styles.inlineBranchNeutralText}>Compare</Text>
             </Pressable>
@@ -1341,12 +1335,12 @@ export function PyCharmGitModal({
 
   const modalContent = (
     <>
-      <View style={styles.backdrop} testID="pycharm-git-modal-backdrop">
-        <View style={styles.modalWindow} testID="pycharm-git-modal">
-          {/* PyCharm Tool Window Top Tab Bar */}
+      <View style={styles.backdrop} testID="ndl-git-modal-backdrop">
+        <View style={styles.modalWindow} testID="ndl-git-modal">
+          {/* NDL-Git Tool Window Top Tab Bar */}
           <View style={styles.topHeader}>
             <View style={styles.topHeaderLeft}>
-              <Text style={styles.toolWindowTitle}>Git</Text>
+              <Text style={styles.toolWindowTitle}>NDL-Git</Text>
 
               {/* Active Log Tab Pill (`Log: master ×`) */}
               <View style={styles.toolWindowTabActive}>
@@ -1386,7 +1380,7 @@ export function PyCharmGitModal({
                         target: (selectedLocalBranchObj ?? selectedRemoteBranchObj)!.name,
                       })
                     }
-                    testID="pycharm-git-header-checkout-selected-btn"
+                    testID="ndl-git-header-checkout-selected-btn"
                   >
                     <GitBranch size={11} color="#10b981" />
                     <Text style={styles.headerSwitchBranchBtnText}>
@@ -1405,7 +1399,7 @@ export function PyCharmGitModal({
                         target: (selectedLocalBranchObj ?? selectedRemoteBranchObj)!.name,
                       })
                     }
-                    testID="pycharm-git-header-merge-selected-btn"
+                    testID="ndl-git-header-merge-selected-btn"
                   >
                     <GitMerge size={11} color="#06b6d4" />
                     <Text style={styles.headerMergeBranchBtnText}>
@@ -1428,7 +1422,7 @@ export function PyCharmGitModal({
                     setConflictInitialFile(conflictState.conflictFiles[0] ?? null);
                     setConflictModalOpen(true);
                   }}
-                  testID="pycharm-git-open-conflicts-btn"
+                  testID="ndl-git-open-conflicts-btn"
                 >
                   <AlertTriangle size={13} color="#f59e0b" />
                   <Text style={styles.headerConflictBtnText}>
@@ -1445,7 +1439,7 @@ export function PyCharmGitModal({
                   setPromptInputValue("");
                 }}
                 disabled={actionBusy}
-                testID="pycharm-git-stash-create-btn"
+                testID="ndl-git-stash-create-btn"
               >
                 <Archive size={13} color="#f59e0b" />
                 <Text style={styles.headerActionBtnText}>Stash</Text>
@@ -1454,7 +1448,7 @@ export function PyCharmGitModal({
                 style={({ pressed }) => [styles.headerActionBtn, pressed && styles.btnPressed]}
                 onPress={() => void fetchGraphData(true)}
                 disabled={loading || actionBusy}
-                testID="pycharm-git-refresh-btn"
+                testID="ndl-git-refresh-btn"
               >
                 <RefreshCw size={13} color={theme.colors.foregroundMuted} />
                 <Text style={styles.headerActionBtnText}>
@@ -1465,7 +1459,7 @@ export function PyCharmGitModal({
                 style={({ pressed }) => [styles.headerActionBtn, pressed && styles.btnPressed]}
                 onPress={() => void handlePull()}
                 disabled={actionBusy}
-                testID="pycharm-git-pull-btn"
+                testID="ndl-git-pull-btn"
               >
                 <ArrowDown size={13} color="#06b6d4" />
                 <Text style={styles.headerActionBtnText}>Pull</Text>
@@ -1474,7 +1468,7 @@ export function PyCharmGitModal({
                 style={({ pressed }) => [styles.headerActionBtn, pressed && styles.btnPressed]}
                 onPress={() => void handlePush()}
                 disabled={actionBusy}
-                testID="pycharm-git-push-btn"
+                testID="ndl-git-push-btn"
               >
                 <ArrowUp size={13} color="#10b981" />
                 <Text style={styles.headerActionBtnText}>Push</Text>
@@ -1482,7 +1476,7 @@ export function PyCharmGitModal({
               <Pressable
                 style={({ pressed }) => [styles.closeBtn, pressed && styles.btnPressed]}
                 onPress={onClose}
-                testID="pycharm-git-close-btn"
+                testID="ndl-git-close-btn"
               >
                 <X size={16} color={theme.colors.foregroundMuted} />
               </Pressable>
@@ -1500,7 +1494,7 @@ export function PyCharmGitModal({
                     ? styles.statusFeedbackSuccess
                     : styles.statusFeedbackInfo,
               ]}
-              testID="pycharm-git-status-banner"
+              testID="ndl-git-status-banner"
             >
               <Text
                 style={[
@@ -1527,7 +1521,7 @@ export function PyCharmGitModal({
 
           {/* Top-Level Prompt / Confirmation Bar (Stash, New Branch, Tag, Reword, Squash, Reset, Confirm) */}
           {promptMode ? (
-            <View style={styles.topPromptBar} testID="pycharm-git-top-prompt-bar">
+            <View style={styles.topPromptBar} testID="ndl-git-top-prompt-bar">
               {promptMode.kind === "confirm-action" ? (
                 <View style={styles.topPromptRow}>
                   <AlertTriangle size={13} color={promptMode.destructive ? "#f43f5e" : "#f59e0b"} />
@@ -1686,7 +1680,7 @@ export function PyCharmGitModal({
 
           {/* Active Operation / Merge Conflict Alert Banner */}
           {conflictState.inProgress !== null || conflictState.conflictFiles.length > 0 ? (
-            <View style={styles.conflictBanner} testID="pycharm-git-conflict-banner">
+            <View style={styles.conflictBanner} testID="ndl-git-conflict-banner">
               <View style={styles.conflictBannerLeft}>
                 <AlertTriangle size={14} color="#f59e0b" />
                 <Text style={styles.conflictBannerTitle}>
@@ -1708,7 +1702,7 @@ export function PyCharmGitModal({
                       setConflictInitialFile(conflictState.conflictFiles[0] ?? null);
                       setConflictModalOpen(true);
                     }}
-                    testID="pycharm-git-resolve-3way-btn"
+                    testID="ndl-git-resolve-3way-btn"
                   >
                     <Layers size={12} color="#0f172a" />
                     <Text style={styles.conflictBannerPrimaryText}>Resolve in 3-Way Merge...</Text>
@@ -1748,9 +1742,9 @@ export function PyCharmGitModal({
             </View>
           ) : null}
 
-          {/* Main 3-Pane PyCharm Body */}
+          {/* Main 3-Pane NDL-Git Body */}
           <View style={styles.threeColumnBody}>
-            {/* LEFT PANE: Hierarchical Branch / Tag / Stash Tree (`pycharm-ref-1.png`) */}
+            {/* LEFT PANE: Hierarchical Branch / Tag / Stash Tree (`ndl-git-ref-1.png`) */}
             <View style={styles.leftColumn}>
               <View style={styles.refFilterBox}>
                 <TextInput
@@ -2206,18 +2200,18 @@ export function PyCharmGitModal({
               ) : null}
             </View>
 
-            {/* CENTER PANE: PyCharm Inline Filter Bar + Ultra-Clean Single-Line Commit Table (`pycharm-ref-1.png`) */}
+            {/* CENTER PANE: NDL-Git Inline Filter Bar + Ultra-Clean Single-Line Commit Table (`ndl-git-ref-1.png`) */}
             <View style={styles.centerColumn}>
-              {/* PyCharm Inline Filter Bar */}
-              <View style={styles.pycharmFilterBar}>
-                <View style={styles.pycharmSearchBox}>
+              {/* NDL-Git Inline Filter Bar */}
+              <View style={styles.ndlFilterBar}>
+                <View style={styles.ndlSearchBox}>
                   <TextInput
                     value={searchQuery}
                     onChangeText={setSearchQuery}
                     placeholder="Text or hash"
                     placeholderTextColor="#64748b"
-                    style={styles.pycharmSearchInput}
-                    testID="pycharm-git-search-input"
+                    style={styles.ndlSearchInput}
+                    testID="ndl-git-search-input"
                   />
                   {searchQuery ? (
                     <Pressable
@@ -2277,7 +2271,7 @@ export function PyCharmGitModal({
                           setAuthorFilterOpen(false);
                         }
                       }}
-                      testID="pycharm-git-author-input"
+                      testID="ndl-git-author-input"
                     />
                     <Pressable
                       onPress={() => {
@@ -2286,7 +2280,7 @@ export function PyCharmGitModal({
                       }}
                       hitSlop={8}
                       style={styles.authorClearBtn}
-                      testID="pycharm-git-author-clear-btn"
+                      testID="ndl-git-author-clear-btn"
                     >
                       <X size={12} color="#94a3b8" />
                     </Pressable>
@@ -2336,7 +2330,7 @@ export function PyCharmGitModal({
                 ) : null}
               </View>
 
-              {/* Single-Line Tabular Commit Rows (`pycharm-ref-1.png`) */}
+              {/* Single-Line Tabular Commit Rows (`ndl-git-ref-1.png`) */}
               {errorMsg ? (
                 <View style={styles.emptyCenterBox}>
                   <Text style={styles.errorText}>{errorMsg}</Text>
@@ -2403,11 +2397,11 @@ export function PyCharmGitModal({
                           setSelectedCompareRef(null);
                           setSelectedCommitSha(commit.sha);
                         }}
-                        testID={`pycharm-git-commit-row-${commit.shortSha}`}
+                        testID={`ndl-git-commit-row-${commit.shortSha}`}
                       >
                         <CommitRowGraphSvg row={row} surfaceColor={theme.colors.surface0} />
 
-                        {/* Column 1: Commit Subject + Subtle Right-Aligned Ref Badge (exact PyCharm layout!) */}
+                        {/* Column 1: Commit Subject + Subtle Right-Aligned Ref Badge (exact NDL-Git layout!) */}
                         <View style={styles.commitRowSubjectCol}>
                           <Text
                             style={[
@@ -2431,16 +2425,16 @@ export function PyCharmGitModal({
                                   <View
                                     key={refLabel}
                                     style={[
-                                      styles.pycharmRefBadge,
-                                      isHead && styles.pycharmRefBadgeHead,
-                                      isTag && styles.pycharmRefBadgeTag,
+                                      styles.ndlRefBadge,
+                                      isHead && styles.ndlRefBadgeHead,
+                                      isTag && styles.ndlRefBadgeTag,
                                     ]}
                                   >
                                     <Tag
                                       size={9}
                                       color={isHead ? "#f59e0b" : isTag ? "#f43f5e" : "#10b981"}
                                     />
-                                    <Text style={styles.pycharmRefBadgeText} numberOfLines={1}>
+                                    <Text style={styles.ndlRefBadgeText} numberOfLines={1}>
                                       {cleanLabel}
                                     </Text>
                                   </View>
@@ -2463,7 +2457,7 @@ export function PyCharmGitModal({
                           style={[styles.commitDateCol, isSelected && styles.commitMetaSelected]}
                           numberOfLines={1}
                         >
-                          {formatPyCharmTableDate(commit.authorDate)}
+                          {formatNdlTableDate(commit.authorDate)}
                         </Text>
                       </Pressable>
                     );
@@ -2472,11 +2466,11 @@ export function PyCharmGitModal({
               )}
             </View>
 
-            {/* RIGHT PANE: Vertically Split Top = Changed Files Directory Tree, Bottom = Clean Commit Message & Details (`pycharm-ref-1.png`) */}
+            {/* RIGHT PANE: Vertically Split Top = Changed Files Directory Tree, Bottom = Clean Commit Message & Details (`ndl-git-ref-1.png`) */}
             <View style={styles.rightColumn}>
               {/* TOP HALF: Changed Files Directory Tree */}
               <View style={styles.rightTopFilesPane}>
-                {/* PyCharm File Tree Toolbar */}
+                {/* NDL-Git File Tree Toolbar */}
                 <View style={styles.rightFilesToolbar}>
                   <View style={styles.rightFilesToolbarLeft}>
                     {selectedStashIndex !== null ? (
@@ -2508,12 +2502,12 @@ export function PyCharmGitModal({
                   </View>
 
                   <View style={styles.rightFilesToolbarRight}>
-                    {/* Open Full-Screen Repository Diff Button (`pycharm-ref-2.png`) */}
+                    {/* Open Full-Screen Repository Diff Button (`ndl-git-ref-2.png`) */}
                     <Pressable
                       style={[styles.openRepoDiffBtn, !selectedFilePath && styles.btnDisabled]}
                       disabled={!selectedFilePath}
                       onPress={() => setRepoDiffModalOpen(true)}
-                      testID="pycharm-open-repository-diff-btn"
+                      testID="ndl-git-open-repository-diff-btn"
                     >
                       <Columns2 size={12} color="#10b981" />
                       <Text style={styles.openRepoDiffBtnText}>Diff (⌘D)</Text>
@@ -2523,7 +2517,7 @@ export function PyCharmGitModal({
                     <Pressable
                       style={[styles.iconToggleBtn, groupFilesByDir && styles.iconToggleBtnActive]}
                       onPress={() => setGroupFilesByDir((v) => !v)}
-                      testID="pycharm-group-by-dir-btn"
+                      testID="ndl-git-group-by-dir-btn"
                     >
                       <Folder size={13} color={groupFilesByDir ? "#10b981" : "#94a3b8"} />
                     </Pressable>
@@ -2603,7 +2597,7 @@ export function PyCharmGitModal({
                 </ScrollView>
               </View>
 
-              {/* BOTTOM HALF: Commit Message, Metadata & Operations (`pycharm-ref-1.png` bottom-right) */}
+              {/* BOTTOM HALF: Commit Message, Metadata & Operations (`ndl-git-ref-1.png` bottom-right) */}
               <View style={styles.rightBottomDetailsPane}>
                 {selectedStashIndex !== null ? (
                   <ScrollView style={styles.commitDetailsScroll} showsVerticalScrollIndicator>
@@ -2650,17 +2644,17 @@ export function PyCharmGitModal({
                         <Text style={styles.compactOpPillText}>Drop</Text>
                       </Pressable>
                     </View>
-                    <Text style={styles.pycharmCommitSubjectTitle}>
+                    <Text style={styles.ndlCommitSubjectTitle}>
                       {stashes.find((s) => s.index === selectedStashIndex)?.message ??
                         "Stashed Changes"}
                     </Text>
                   </ScrollView>
                 ) : selectedCompareRef !== null ? (
                   <ScrollView style={styles.commitDetailsScroll} showsVerticalScrollIndicator>
-                    <Text style={styles.pycharmCommitSubjectTitle}>
+                    <Text style={styles.ndlCommitSubjectTitle}>
                       Comparing {selectedCompareRef} ↔ HEAD ({currentBranch ?? "HEAD"})
                     </Text>
-                    <Text style={styles.pycharmCommitMetaFooter}>
+                    <Text style={styles.ndlCommitMetaFooter}>
                       Click any file above or press Diff (⌘D) to open the full-screen Side-by-Side
                       Repository Diff.
                     </Text>
@@ -2682,7 +2676,7 @@ export function PyCharmGitModal({
                             target: selectedCommit.sha,
                           })
                         }
-                        testID="pycharm-git-cherry-pick-btn"
+                        testID="ndl-git-cherry-pick-btn"
                       >
                         <GitPullRequest size={11} color="#10b981" />
                         <Text style={styles.compactOpPillText}>Cherry-Pick</Text>
@@ -2697,7 +2691,7 @@ export function PyCharmGitModal({
                             target: selectedCommit.sha,
                           })
                         }
-                        testID="pycharm-git-revert-btn"
+                        testID="ndl-git-revert-btn"
                       >
                         <Undo2 size={11} color="#f59e0b" />
                         <Text style={styles.compactOpPillText}>Revert</Text>
@@ -2717,7 +2711,7 @@ export function PyCharmGitModal({
                           });
                           setPromptInputValue(fullMsg);
                         }}
-                        testID="pycharm-git-reword-btn"
+                        testID="ndl-git-reword-btn"
                       >
                         <Edit3 size={11} color="#06b6d4" />
                         <Text style={styles.compactOpPillText}>Reword</Text>
@@ -2735,7 +2729,7 @@ export function PyCharmGitModal({
                             });
                             setPromptInputValue("");
                           }}
-                          testID="pycharm-git-squash-btn"
+                          testID="ndl-git-squash-btn"
                         >
                           <Scissors size={11} color="#10b981" />
                           <Text style={styles.compactOpPillText}>Squash</Text>
@@ -2751,7 +2745,7 @@ export function PyCharmGitModal({
                             target: selectedCommit.sha,
                           })
                         }
-                        testID="pycharm-git-drop-commit-btn"
+                        testID="ndl-git-drop-commit-btn"
                       >
                         <Trash2 size={11} color="#f43f5e" />
                         <Text style={styles.compactOpPillText}>Drop</Text>
@@ -2767,7 +2761,7 @@ export function PyCharmGitModal({
                               : { kind: "reset", targetSha: selectedCommit.sha },
                           )
                         }
-                        testID="pycharm-git-reset-btn"
+                        testID="ndl-git-reset-btn"
                       >
                         <RotateCcw size={11} color="#f43f5e" />
                         <Text style={styles.compactOpPillText}>Reset...</Text>
@@ -2831,32 +2825,32 @@ export function PyCharmGitModal({
                       ) : null}
                     </View>
 
-                    {/* PyCharm Commit Subject & Body (`pycharm-ref-1.png` bottom-right) */}
-                    <Text style={styles.pycharmCommitSubjectTitle}>{selectedCommit.subject}</Text>
+                    {/* NDL-Git Commit Subject & Body (`ndl-git-ref-1.png` bottom-right) */}
+                    <Text style={styles.ndlCommitSubjectTitle}>{selectedCommit.subject}</Text>
 
                     {selectedCommit.body ? (
-                      <Text style={styles.pycharmCommitBodyText}>{selectedCommit.body}</Text>
+                      <Text style={styles.ndlCommitBodyText}>{selectedCommit.body}</Text>
                     ) : null}
 
-                    {/* PyCharm Footer Line: `<sha> <author> <email> on <date> at <time>` */}
-                    <View style={styles.pycharmCommitFooterBlock}>
-                      <View style={styles.pycharmCommitFooterLine}>
+                    {/* NDL-Git Footer Line: `<sha> <author> <email> on <date> at <time>` */}
+                    <View style={styles.ndlCommitFooterBlock}>
+                      <View style={styles.ndlCommitFooterLine}>
                         <Pressable
                           onPress={() => void handleCopySha(selectedCommit.sha)}
-                          style={styles.pycharmInlineShaBtn}
+                          style={styles.ndlInlineShaBtn}
                         >
-                          <Text style={styles.pycharmInlineShaText}>{selectedCommit.shortSha}</Text>
+                          <Text style={styles.ndlInlineShaText}>{selectedCommit.shortSha}</Text>
                           <Copy size={10} color="#64748b" />
                         </Pressable>
-                        <Text style={styles.pycharmCommitMetaFooter}>
+                        <Text style={styles.ndlCommitMetaFooter}>
                           {selectedCommit.authorName}{" "}
                           {selectedCommit.authorEmail ? `<${selectedCommit.authorEmail}>` : ""}{" "}
-                          {formatPyCharmFullDate(selectedCommit.authorDate)}
+                          {formatNdlFullDate(selectedCommit.authorDate)}
                         </Text>
                       </View>
 
                       {selectedCommit.refs && selectedCommit.refs.length > 0 ? (
-                        <Text style={styles.pycharmInBranchesText}>
+                        <Text style={styles.ndlInBranchesText}>
                           In refs: {selectedCommit.refs.join(", ")}
                         </Text>
                       ) : null}
@@ -2869,11 +2863,11 @@ export function PyCharmGitModal({
         </View>
       </View>
 
-      {/* DEDICATED FULL-SCREEN PYCHARM "REPOSITORY DIFF" WINDOW (`pycharm-ref-2.png`) */}
+      {/* DEDICATED FULL-SCREEN NDL-GIT "REPOSITORY DIFF" WINDOW */}
       {repoDiffModalOpen && selectedFilePath ? (
-        <View style={styles.repoDiffBackdrop} testID="pycharm-repository-diff-modal">
+        <View style={styles.repoDiffBackdrop} testID="ndl-git-repository-diff-modal">
           <View style={styles.repoDiffWindow}>
-            {/* PyCharm Repository Diff Top Header Bar */}
+            {/* NDL-Git Repository Diff Top Header Bar */}
             <View style={styles.repoDiffHeaderBar}>
               <View style={styles.repoDiffHeaderLeft}>
                 <Text style={styles.repoDiffWindowTitle} numberOfLines={1}>
@@ -3364,7 +3358,7 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "column",
     minWidth: 0,
   },
-  pycharmFilterBar: {
+  ndlFilterBar: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
@@ -3374,7 +3368,7 @@ const styles = StyleSheet.create((theme) => ({
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
   },
-  pycharmSearchBox: {
+  ndlSearchBox: {
     flex: 1,
     minWidth: 120,
     maxWidth: 280,
@@ -3388,7 +3382,7 @@ const styles = StyleSheet.create((theme) => ({
     borderWidth: 1,
     borderColor: theme.colors.border,
   },
-  pycharmSearchInput: {
+  ndlSearchInput: {
     flex: 1,
     minWidth: 0,
     width: 0,
@@ -3504,7 +3498,7 @@ const styles = StyleSheet.create((theme) => ({
     gap: 4,
     flexShrink: 0,
   },
-  pycharmRefBadge: {
+  ndlRefBadge: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
@@ -3516,13 +3510,13 @@ const styles = StyleSheet.create((theme) => ({
     borderColor: theme.colors.border,
     maxWidth: 150,
   },
-  pycharmRefBadgeHead: {
+  ndlRefBadgeHead: {
     borderColor: "rgba(245, 158, 11, 0.45)",
   },
-  pycharmRefBadgeTag: {
+  ndlRefBadgeTag: {
     borderColor: "rgba(244, 63, 94, 0.45)",
   },
-  pycharmRefBadgeText: {
+  ndlRefBadgeText: {
     fontSize: 11,
     color: theme.colors.foregroundMuted,
   },
@@ -3726,47 +3720,47 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: 11,
     color: theme.colors.foreground,
   },
-  pycharmCommitSubjectTitle: {
+  ndlCommitSubjectTitle: {
     fontSize: 13.5,
     fontWeight: theme.fontWeight.semibold,
     color: theme.colors.foreground,
     lineHeight: 19,
     marginBottom: 8,
   },
-  pycharmCommitBodyText: {
+  ndlCommitBodyText: {
     fontSize: 12.5,
     color: theme.colors.foregroundMuted,
     lineHeight: 18,
     marginBottom: 12,
   },
-  pycharmCommitFooterBlock: {
+  ndlCommitFooterBlock: {
     marginTop: 6,
     paddingTop: 8,
     borderTopWidth: 1,
     borderTopColor: theme.colors.border,
     gap: 4,
   },
-  pycharmCommitFooterLine: {
+  ndlCommitFooterLine: {
     flexDirection: "row",
     alignItems: "center",
     flexWrap: "wrap",
     gap: 6,
   },
-  pycharmInlineShaBtn: {
+  ndlInlineShaBtn: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
   },
-  pycharmInlineShaText: {
+  ndlInlineShaText: {
     fontSize: 11.5,
     fontFamily: theme.fontFamily.mono,
     color: theme.colors.foregroundMuted,
   },
-  pycharmCommitMetaFooter: {
+  ndlCommitMetaFooter: {
     fontSize: 11.5,
     color: theme.colors.foregroundMuted,
   },
-  pycharmInBranchesText: {
+  ndlInBranchesText: {
     fontSize: 11,
     color: theme.colors.foregroundMuted,
   },
@@ -4133,3 +4127,6 @@ const styles = StyleSheet.create((theme) => ({
     color: "#06b6d4",
   },
 }));
+
+export type PyCharmGitModalProps = NdlGitModalProps;
+export const PyCharmGitModal = NdlGitModal;

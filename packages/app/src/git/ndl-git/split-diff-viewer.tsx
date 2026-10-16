@@ -268,7 +268,7 @@ export function SplitDiffViewer({
         </View>
       ) : null}
 
-      {/* PyCharm Revision Path Bar (Left vs Right panes) */}
+      {/* NDL-Git Revision Path Bar (Left vs Right panes) */}
       {mode === "split" ? (
         <View style={styles.revisionSubHeaderRow}>
           <View style={[styles.revisionSubHeaderPane, styles.splitLeftBorder]}>
@@ -354,7 +354,7 @@ export function SplitDiffViewer({
                   ) : null}
                 </View>
 
-                {/* Hunk Body: Unified or PyCharm Side-by-Side (Split) */}
+                {/* Hunk Body: Unified or NDL-Git Side-by-Side (Split) */}
                 {mode === "unified" ? (
                   <View style={styles.unifiedBody}>
                     {unifiedLines.slice(0, 400).map((line, lIdx) => {
@@ -430,7 +430,7 @@ export function SplitDiffViewer({
                             </Text>
                           </View>
 
-                          {/* PyCharm Center Dual Line-Number & Connector Gutter */}
+                          {/* NDL-Git Center Dual Line-Number & Connector Gutter */}
                           <View
                             style={[
                               styles.centerBridgeGutter,

@@ -105,7 +105,7 @@ export function buildDiffTree(files: ParsedDiffFile[]): DiffTreeDirNode {
 }
 
 /**
- * PyCharm "Group by Directory" flat directory tree:
+ * NDL-Git "Group by Directory" flat directory tree:
  * Groups modified files by their full parent directory path (depth 0 folder rows)
  * with files directly inside at depth 1, eliminating deep staircase nesting.
  */

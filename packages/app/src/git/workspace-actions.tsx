@@ -4,7 +4,7 @@ import { StyleSheet } from "react-native-unistyles";
 import { BranchSwitcher } from "@/components/branch-switcher";
 import { GitActionsSplitButton } from "@/git/actions-split-button";
 import { GIT_ACTION_ICONS } from "@/git/action-icons";
-import { MergeConflictResolverModal } from "@/git/pycharm-git-window/merge-conflict-resolver-modal";
+import { MergeConflictResolverModal } from "@/git/ndl-git/merge-conflict-resolver-modal";
 import { useGitActions } from "@/git/use-actions";
 
 interface WorkspaceActionsProps {

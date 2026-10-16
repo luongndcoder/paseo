@@ -44,8 +44,8 @@ import { confirmDialog } from "@/utils/confirm-dialog";
 import { usePublishPanelInstanceAttributes } from "@/panels/panel-instance-attributes";
 import type { Theme } from "@/styles/theme";
 import { ZoomableImage } from "@/components/zoomable-viewport/image";
-import { GitBlameModal } from "@/git/pycharm-git-window/git-blame-modal";
-import { PyCharmGitModal } from "@/git/pycharm-git-window/pycharm-git-modal";
+import { GitBlameModal } from "@/git/ndl-git/git-blame-modal";
+import { NdlGitModal } from "@/git/ndl-git/ndl-git-modal";
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const foregroundMutedColorMapping = (theme: Theme) => ({
@@ -391,7 +391,7 @@ export function FilePane({
               setGitHistoryOpen(true);
             }}
           />
-          <PyCharmGitModal
+          <NdlGitModal
             visible={gitHistoryOpen}
             onClose={() => setGitHistoryOpen(false)}
             serverId={serverId}

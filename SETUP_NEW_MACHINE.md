@@ -4,7 +4,7 @@ Tài liệu này hướng dẫn cài đặt trọn bộ hệ sinh thái **Paseo 
 
 1. **Paseo (`paseo`)** — Hệ thống Paseo kèm:
    - **Dictation Tiếng Việt Local (`sherpa-onnx`)**: Nhận diện giọng nói tiếng Việt offline + hiển thị chữ realtime khi đang đọc.
-   - **PyCharm Git Tool Window (`Cmd + 9`)**: Swimlane Commit Graph, Branch/Tag/Stash tree, Side-by-Side Split Diff, Hunk Stage/Rollback, 3-Way Merge Conflict Resolver, Git Blame, và File Explorer Search.
+   - **NDL-Git Tool Window (`ndl-git`, `Cmd + 9`)**: Swimlane Commit Graph, Branch/Tag/Stash tree, Side-by-Side Split Diff, Hunk Stage/Rollback, 3-Way Merge Conflict Resolver, Git Blame, và File Explorer Search.
    - **PlantUML Native Render**: Xem trực tiếp sơ đồ PlantUML trong khung chat Markdown và trình xem file `.puml` / `.plantuml`.
    - **Workspace UI**: Cây thư mục Agent trên sidebar, hiển thị `zero-sub`, và menu mở nhanh tinh gọn (**VS Code** & **Finder**).
 2. **SLP (`paseo-slp`)** — Hệ thống điều phối đa tác tử **SLP (Supervisor / Lead / Peers)** kèm bộ công cụ kiểm chứng tất định (`slp-verify`, `slp-evidence`, `slp-guard.py`, `slp-conformance`).
@@ -240,7 +240,7 @@ launchctl kickstart -k gui/$(id -u)/com.paseo.daemon
 
 1. **Mở giao diện Web UI / Desktop App**:
    - Truy cập: [http://localhost:6767](http://localhost:6767)
-   - Kiểm tra phím tắt `Cmd + 9` mở **PyCharm Git Tool Window**.
+   - Kiểm tra phím tắt `Cmd + 9` mở **NDL-Git Tool Window**.
    - Kiểm tra nút Microphone trên thanh nhập chat để thử nghiệm đọc giọng nói tiếng Việt realtime.
 2. **Kiểm tra trạng thái Daemon & Logs**:
    ```bash

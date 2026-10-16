@@ -63,8 +63,8 @@ import {
   useCheckoutPrStatusQuery,
 } from "@/git/use-pr-status-query";
 import { CommitsSection } from "@/git/commits-section/commits-section";
-import { PyCharmGitModal } from "@/git/pycharm-git-window/pycharm-git-modal";
-import { MergeConflictResolverModal } from "@/git/pycharm-git-window/merge-conflict-resolver-modal";
+import { NdlGitModal } from "@/git/ndl-git/ndl-git-modal";
+import { MergeConflictResolverModal } from "@/git/ndl-git/merge-conflict-resolver-modal";
 import { useAppSettings } from "@/hooks/use-settings";
 import { useChangesPreferences } from "@/hooks/use-changes-preferences";
 import {
@@ -1180,7 +1180,7 @@ function ChangesMergeMenu({ model }: { model: ChangesRepositoryToolbarModel }) {
       <DropdownMenuTrigger
         testID="changes-merge-menu-trigger"
         accessibilityRole="button"
-        accessibilityLabel="PyCharm Quick Merge & Branch Actions"
+        accessibilityLabel="NDL-Git Quick Merge & Branch Actions"
         style={(state) => [
           toolbarLabelTriggerStyle(state),
           conflictCount > 0 ? styles.mergeToolbarTriggerConflict : styles.mergeToolbarTriggerNormal,
@@ -1471,7 +1471,7 @@ function ChangesRepositoryToolbar({
           <Pressable
             testID="changes-open-git-log-button"
             accessibilityRole="button"
-            accessibilityLabel="Open PyCharm Git Log (Cmd+9)"
+            accessibilityLabel="Open NDL-Git Log (Cmd+9)"
             onPress={model.onOpenGitLog}
             style={toolbarLabelTriggerStyle}
           >
@@ -1482,7 +1482,7 @@ function ChangesRepositoryToolbar({
                   <ToolbarLabelTriggerIcon>
                     <GitLogToolbarIcon size={14} strokeWidth={1.5} />
                   </ToolbarLabelTriggerIcon>
-                  <Text style={toolbarLabelTriggerTextStyle(highlighted)}>Git Log</Text>
+                  <Text style={toolbarLabelTriggerTextStyle(highlighted)}>NDL-Git</Text>
                 </>
               );
             }}
@@ -2960,7 +2960,7 @@ export function ChangesSurface({
 
       {isGit ? (
         <>
-          <PyCharmGitModal
+          <NdlGitModal
             visible={gitLogModalOpen}
             onClose={handleCloseGitLog}
             serverId={serverId}
