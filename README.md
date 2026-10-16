@@ -5,15 +5,15 @@
 <h1 align="center">Paseo</h1>
 
 <p align="center">
-  <a href="README.md">English</a> ·
-  <a href="SETUP_NEW_MACHINE.md"><strong>🇻🇳 Hướng dẫn cài đặt máy mới (Vietnamese Voice + NDL-Git + SLP)</strong></a> ·
+  <a href="README.md"><strong>English</strong></a> ·
+  <a href="SETUP_NEW_MACHINE.md">Machine Setup Guide</a> ·
   <a href="README.zh-CN.md">简体中文</a> ·
   <a href="README.ja.md">日本語</a> ·
   <a href="README.ko.md">한국어</a>
 </p>
 
-> **Bản Fork Cá Nhân (`luongndcoder/paseo`)**: Tích hợp nhận diện giọng nói tiếng Việt offline (`sherpa-onnx`), bộ công cụ NDL-Git trực quan (`ndl-git`, phím tắt `Cmd + 9`), PlantUML preview, ZeroSub (`luongndcoder/zerosub`), và hệ thống điều phối đa tác tử **SLP (`luongndcoder/paseo-slp`)**.
-> 👉 Xem hướng dẫn cài đặt trọn bộ từ đầu cho máy mới tại **[SETUP_NEW_MACHINE.md](SETUP_NEW_MACHINE.md)** hoặc chạy `bash scripts/setup-new-machine.sh`.
+> **Enhanced Fork (`luongndcoder/paseo`)**: Integrated with offline on-device Vietnamese speech recognition (`sherpa-onnx`), visual NDL-Git tool suite (`ndl-git`, shortcut `Cmd + 9`), live PlantUML diagram rendering, ZeroSub multi-account failover (`luongndcoder/zerosub`), and the **SLP (`luongndcoder/paseo-slp`)** multi-agent orchestration framework.
+> 👉 For the step-by-step setup guide on a fresh machine, see **[SETUP_NEW_MACHINE.md](SETUP_NEW_MACHINE.md)** or run `bash scripts/setup-new-machine.sh`.
 
 <p align="center">
   <a href="https://github.com/getpaseo/paseo/stargazers">
@@ -55,6 +55,24 @@ Paseo is an open source agentic development environment for desktop, mobile, web
 - **Privacy-first:** Paseo doesn't have any telemetry, tracking, or forced log-ins.
 
 [Run parallel tasks in Paseo](https://paseo.sh/docs/parallel-development): start agents in separate worktrees, review their diffs, run each app, and check it in the built-in browser.
+
+---
+
+## Enhanced Fork Features
+
+This custom fork (`luongndcoder/paseo`) introduces high-productivity extensions tailored for local-first development, rich Git workflows, and multi-agent systems:
+
+- 🎙️ **Offline Vietnamese Voice Dictation (`sherpa-onnx`)**: Low-latency, privacy-first on-device speech-to-text with Silero VAD, streaming real-time transcription directly into the prompt composer.
+- 🌿 **NDL-Git Tool Suite (`ndl-git`, `Cmd + 9`)**: A full-featured visual Git control center featuring:
+  - Interactive multi-branch swimlane commit graph with refs, tags, and stashes.
+  - Side-by-side split diff viewer with single-hunk staging (`+ Stage Hunk`) and rollback (`↺ Rollback Hunk`).
+  - 3-Way merge conflict resolver (Yours / Merged Result editable / Theirs) with 1-click conflict block acceptance.
+  - Comprehensive stash stack inspector (`apply`, `pop`, `drop`, `branch`).
+- 📊 **PlantUML Live Preview**: Native rendering of `.puml` files and embedded Markdown diagrams.
+- 🤖 **SLP Multi-Agent Orchestration (`paseo-slp`)**: Hierarchical coordination with Supervisor, Lead Planner, Peer Builders, and deterministic verification tools (`slp-verify`, `slp-evidence`).
+- 🔄 **ZeroSub Account Rotation (`zerosub`)**: Automatic failover across multiple Claude Code and Codex API profiles to prevent quota interruption.
+
+---
 
 ## System Architecture
 
