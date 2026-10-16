@@ -980,7 +980,12 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
     ),
   );
 
-  const { visibleSubagents, hiddenArchivedCount, totalArchivedCount } = useMemo(() => {
+  const {
+    visibleActiveSubagents,
+    visibleArchivedSubagents,
+    hiddenArchivedCount,
+    totalArchivedCount,
+  } = useMemo(() => {
     const active: SubagentRow[] = [];
     const archived: SubagentRow[] = [];
 
@@ -992,11 +997,15 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
       }
     }
 
+    // Active subagents sorted chronologically
+    active.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    // Archived subagents sorted chronologically
+    archived.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+
     if (archived.length <= ARCHIVED_SUBAGENTS_LIMIT || showAllArchived) {
-      const all = [...archived, ...active];
-      all.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
       return {
-        visibleSubagents: all,
+        visibleActiveSubagents: active,
+        visibleArchivedSubagents: archived,
         hiddenArchivedCount: 0,
         totalArchivedCount: archived.length,
       };
@@ -1014,14 +1023,13 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
       });
       if (selectedArchived && !newestArchived.some((r) => r.id === selectedArchived.id)) {
         newestArchived.unshift(selectedArchived);
+        newestArchived.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
       }
     }
 
-    const visible = [...newestArchived, ...active];
-    visible.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
-
     return {
-      visibleSubagents: visible,
+      visibleActiveSubagents: active,
+      visibleArchivedSubagents: newestArchived,
       hiddenArchivedCount: hiddenCount,
       totalArchivedCount: archived.length,
     };
@@ -1042,6 +1050,23 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
         onMouseDown: (e: { stopPropagation?: () => void }) => e.stopPropagation?.(),
       } as object)}
     >
+      {/* 1. Working / Active subagents on top */}
+      {visibleActiveSubagents.map((row) => {
+        const rowTargetKey =
+          row.kind === "paseo" ? `paseo:${row.id}` : `provider:${row.parentAgentId}:${row.id}`;
+        return (
+          <SidebarSubagentTreeItem
+            key={`${row.kind}_${row.id}`}
+            workspace={workspace}
+            row={row}
+            parentProvider={parentProvider}
+            isSelected={activeTargetKey === rowTargetKey}
+            getProviderIcon={getProviderIcon}
+          />
+        );
+      })}
+
+      {/* 2. Toggle button for older archived subagents */}
       {hiddenArchivedCount > 0 ? (
         <Pressable
           accessibilityRole="button"
@@ -1074,7 +1099,9 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
           <Text style={styles.treeToggleMoreText}>Show less</Text>
         </Pressable>
       ) : null}
-      {visibleSubagents.map((row) => {
+
+      {/* 3. Archived / Completed subagents below */}
+      {visibleArchivedSubagents.map((row) => {
         const rowTargetKey =
           row.kind === "paseo" ? `paseo:${row.id}` : `provider:${row.parentAgentId}:${row.id}`;
         return (
