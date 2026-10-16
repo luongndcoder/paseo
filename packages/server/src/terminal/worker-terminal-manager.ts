@@ -153,7 +153,10 @@ function forkTerminalWorker(): TerminalWorkerProcess {
 export function createWorkerTerminalManager(
   managerOptions: WorkerTerminalManagerOptions = {},
 ): TerminalManager {
-  const worker = managerOptions.forkWorker ? managerOptions.forkWorker() : forkTerminalWorker();
+  const spawnWorker = (): TerminalWorkerProcess =>
+    managerOptions.forkWorker ? managerOptions.forkWorker() : forkTerminalWorker();
+  let worker = spawnWorker();
+  let shuttingDown = false;
   const requestTimeoutMs = managerOptions.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
   const pendingRequests = new Map<string, PendingRequest>();
   const recordsById = new Map<string, WorkerTerminalRecord>();
@@ -591,34 +594,64 @@ export function createWorkerTerminalManager(
     }
   }
 
-  worker.on("message", (message: TerminalWorkerToParentMessage) => {
-    if (isResponse(message)) {
-      const pending = pendingRequests.get(message.requestId);
-      if (!pending) {
+  function attachWorker(attached: TerminalWorkerProcess): void {
+    attached.on("message", (message: TerminalWorkerToParentMessage) => {
+      if (attached !== worker) {
         return;
       }
-      clearTimeout(pending.timeout);
-      pendingRequests.delete(message.requestId);
-      if (message.ok) {
-        pending.resolve(message.result);
-      } else {
-        pending.reject(new Error(message.error));
+      if (isResponse(message)) {
+        const pending = pendingRequests.get(message.requestId);
+        if (!pending) {
+          return;
+        }
+        clearTimeout(pending.timeout);
+        pendingRequests.delete(message.requestId);
+        if (message.ok) {
+          pending.resolve(message.result);
+        } else {
+          pending.reject(new Error(message.error));
+        }
+        return;
       }
-      return;
-    }
-    handleWorkerEvent(message);
-  });
+      handleWorkerEvent(message);
+    });
 
-  worker.on("exit", (code, signal) => {
-    workerExited = true;
-    if (workerShutdownTimer) {
-      clearTimeout(workerShutdownTimer);
-      workerShutdownTimer = null;
-    }
-    rejectPendingRequests(new Error(`Terminal worker exited (${signal ?? code ?? "unknown"})`));
-  });
+    attached.on("exit", (code, signal) => {
+      if (attached !== worker) {
+        return;
+      }
+      workerExited = true;
+      if (workerShutdownTimer) {
+        clearTimeout(workerShutdownTimer);
+        workerShutdownTimer = null;
+      }
+      rejectPendingRequests(new Error(`Terminal worker exited (${signal ?? code ?? "unknown"})`));
+      if (!shuttingDown) {
+        // The worker owned every PTY, so they are all gone. Report them as exited;
+        // the next request starts a fresh worker.
+        for (const terminalId of Array.from(recordsById.keys())) {
+          handleTerminalExitEvent({
+            type: "terminalExit",
+            terminalId,
+            info: { exitCode: null, signal: null, lastOutputLines: [] },
+          });
+        }
+      }
+    });
+  }
+
+  attachWorker(worker);
 
   function sendRequest(input: TerminalWorkerRequestInput): Promise<unknown> {
+    if ((workerExited || !worker.connected) && !shuttingDown) {
+      try {
+        worker = spawnWorker();
+        workerExited = false;
+        attachWorker(worker);
+      } catch (error) {
+        return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    }
     if (workerExited || !worker.connected) {
       return Promise.reject(new Error("Terminal worker is not running"));
     }
@@ -816,6 +849,7 @@ export function createWorkerTerminalManager(
     },
 
     killAll(): void {
+      shuttingDown = true;
       void sendRequest({ type: "killAll" })
         .catch(() => {
           // no-op

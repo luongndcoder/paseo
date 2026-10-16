@@ -625,6 +625,39 @@ it("includes only stamped terminals in workspace-scoped local reads", async () =
   ]);
 });
 
+it("respawns the worker after a crash and reports its terminals as exited", async () => {
+  const workers: FakeTerminalWorker[] = [];
+  manager = createWorkerTerminalManager({
+    requestTimeoutMs: 50,
+    forkWorker: () => {
+      const next = new FakeTerminalWorker();
+      workers.push(next);
+      return next;
+    },
+  });
+
+  workers[0]!.emitWorkerMessage({
+    type: "terminalCreated",
+    terminal: {
+      id: "terminal-crash",
+      name: "Shell",
+      cwd: "/workspace",
+      workspaceId: "ws-test",
+      activity: { state: "idle", changedAt: 0 },
+    },
+    state: createTerminalState(),
+  });
+  expect(manager.getTerminal("terminal-crash")).toBeDefined();
+
+  workers[0]!.connected = false;
+  workers[0]!.emit("exit", null, "SIGKILL");
+  expect(manager.getTerminal("terminal-crash")).toBeUndefined();
+
+  void manager.createTerminal({ cwd: "/workspace", workspaceId: "ws-test" }).catch(() => undefined);
+  expect(workers).toHaveLength(2);
+  expect(workers[1]!.sentMessages.length).toBeGreaterThan(0);
+});
+
 it("rejects non-absolute cwd in getTerminals", async () => {
   const worker = new FakeTerminalWorker();
   manager = createWorkerTerminalManager({
