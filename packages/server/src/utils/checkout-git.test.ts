@@ -428,6 +428,8 @@ describe("checkout git utilities", () => {
           },
         ],
         status: "ok",
+        staged: false,
+        unstaged: true,
       },
     ]);
   });
@@ -1628,7 +1630,7 @@ const x = 1;
     expect(diff.diff).toContain(`-export const value = "old";`);
     expect(diff.diff).toContain(`+export const value = "new";`);
     expect(commands).toContain(
-      "diff --no-ext-diff --no-color --src-prefix=a/ --dst-prefix=b/ --numstat HEAD",
+      "diff --no-ext-diff --no-color --src-prefix=a/ --dst-prefix=b/ -z --numstat HEAD",
     );
     expect(commands).toContain(
       "diff --no-ext-diff --no-color --src-prefix=a/ --dst-prefix=b/ HEAD -- :(literal)generated.js :(literal)small.ts",

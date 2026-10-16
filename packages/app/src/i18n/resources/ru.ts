@@ -620,6 +620,9 @@ export const ru: TranslationResources = {
       updateHost: "Обновите хост, чтобы использовать нативный рендерер терминала.",
       unableToSubscribe: "Не удалось подключиться к терминалу",
     },
+    sheet: {
+      openAsTab: "Открыть во вкладке",
+    },
     tabs: {
       loading: "Загрузка...",
       modified: "Несохранённые изменения",
@@ -635,7 +638,7 @@ export const ru: TranslationResources = {
       },
       switcher: {
         trigger: "Переключить вкладки (открыто: {{count}})",
-        title: "Переключить вкладку",
+        title: "Вкладки рабочего пространства",
         searchPlaceholder: "Поиск вкладок",
       },
       menu: {
@@ -1683,13 +1686,18 @@ export const ru: TranslationResources = {
     title: "Добавить провайдера",
     search: "Поиск провайдеров",
     noProviders: "Провайдеры не найдены",
+    clearSearch: "Очистить поиск",
     actions: {
       add: "Добавить",
+      addProvider: "Добавить {{provider}}",
       adding: "Добавление",
       installed: "Установлено",
       cancel: "Отмена",
       installInstructions: "Инструкции по установке",
       installInstructionsFor: "Инструкции по установке {{provider}}",
+    },
+    types: {
+      acp: "ACP",
     },
     errors: {
       unableToInstall: "Не удалось установить провайдера",
