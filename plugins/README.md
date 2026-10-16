@@ -1,34 +1,35 @@
-# Hệ Thống Plugin Paseo (Paseo Plugin Architecture)
+# Paseo Plugin Architecture & Built-in Plugins
 
-Hệ thống Plugin của Paseo được thiết kế theo kiến trúc **"Write once, run everywhere"** — Plugin được nạp và thực thi trên **Paseo Daemon** (`@getpaseo/server`), đồng thời tự động đồng bộ trạng thái, giao diện (UI) và vòng đời tác tử tới mọi client kết nối (Desktop Electron, Web, iOS, Android Expo).
+The Paseo plugin system is designed around the **"Write once, run everywhere"** paradigm. Plugins execute on the **Paseo Daemon** (`@getpaseo/server`) and seamlessly project their user interface, state, and agent lifecycle hooks to all connected clients (Desktop Electron, Web, iOS, Android React Native).
 
 ---
 
-## 1. Sơ đồ tổng quát kiến trúc Plugin (Plugin Architecture Overview)
+## 1. System Architecture Overview
 
-Sơ đồ dưới đây mô tả cách Paseo nạp, phân loại và kết nối các Plugin từ máy chủ daemon đến giao diện người dùng trên mọi nền tảng:
+The following diagram illustrates how Paseo discovers, loads, and coordinates plugins between the daemon host and multi-platform client applications:
 
 ```mermaid
 flowchart TD
     subgraph Discovery["1. Discovery & Manifest Loading"]
         Builtin["Built-in Plugins (plugins/*)"]
-        Local["Local Plugins (workspace/custom-plugin)"]
+        Local["Local Directory Plugins (./custom-plugin)"]
+        GitRemote["Direct Git Plugins (github:owner/repo)"]
         Registry["Paseo Registry (~/.paseo/plugins/*)"]
         Manifest["paseo-plugin.json<br/>(Metadata, Capabilities, Entry Points)"]
     end
 
     subgraph HostRuntime["2. Paseo Daemon Plugin Host (@getpaseo/server)"]
-        PluginMgr["Plugin Manager & Module Loader"]
+        PluginMgr["Plugin Manager & Dynamic Module Loader"]
         ServerCtx["PluginServerContext API"]
 
-        subgraph Registrations["Các kênh mở rộng chính"]
+        subgraph Registrations["Core Extension Channels"]
             ProviderReg["server.registerProvider()<br/>(Custom AI Agent Providers)"]
-            UsageReg["server.registerUsageSource()<br/>(Token & Quota Trackers)"]
-            LifecycleReg["server.registerLifecycleHook()<br/>(Turn hooks, Auto-followup)"]
+            UsageReg["server.registerUsageSource()<br/>(Token, Quota & Rate Limit Trackers)"]
+            LifecycleReg["server.registerLifecycleHook()<br/>(Turn hooks, Auto-followup, Permissions)"]
         end
     end
 
-    subgraph BuiltinInstances["3. Các Plugin tích hợp sẵn (Built-in)"]
+    subgraph BuiltinInstances["3. Built-in Plugins (In-Tree)"]
         subgraph Providers["Provider Plugins"]
             P_AGY["antigravity-provider (Antigravity agy)"]
             P_MUSE["muse-provider (Muse Code CLI)"]
@@ -43,14 +44,15 @@ flowchart TD
         end
     end
 
-    subgraph ClientsSync["4. Đồng bộ Giao diện & Trạng thái (Clients)"]
-        WS["WebSocket Protocol Stream"]
-        UIElements["Screens / Sidebar / Composer Pills / Quota Widgets"]
-        AppClients["Desktop (Electron) / Web / iOS / Android"]
+    subgraph ClientsSync["4. Client State & UI Synchronization"]
+        WS["WebSocket Protocol Stream (@getpaseo/protocol)"]
+        UIElements["Custom Screens / Sidebar Items / Composer Pills / Quota Widgets"]
+        AppClients["Desktop (Electron) / Web Client / iOS & Android (Expo)"]
     end
 
     Builtin --> Manifest
     Local --> Manifest
+    GitRemote --> Manifest
     Registry --> Manifest
     Manifest --> PluginMgr
     PluginMgr --> ServerCtx
@@ -70,149 +72,208 @@ flowchart TD
 
 ---
 
-## 2. Sơ đồ chi tiết luồng vòng đời Provider Plugin (Provider Execution Lifecycle)
+## 2. Provider Plugin Lifecycle & Execution Flow
 
-Sơ đồ trình tự mô tả cách một **Provider Plugin** (như `antigravity-provider` hoặc `muse-provider`) khởi tạo, kiểm tra khả dụng của CLI trên máy, spawn process và truyền dữ liệu hai chiều:
+This sequence diagram depicts how a **Provider Plugin** (such as `antigravity-provider` or `muse-provider`) registers capabilities, verifies local binary availability, instantiates sessions, spawns agent subprocesses, and streams real-time events to the UI:
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor User as Người dùng (Paseo App)
+    actor User as Developer (Paseo App)
     participant Client as Client UI (Desktop / Web / Mobile)
     participant Daemon as Paseo Daemon (@getpaseo/server)
     participant Plugin as Provider Plugin (e.g. Antigravity)
     participant Subprocess as Agent CLI Process (agy / muse)
 
-    Note over Daemon,Plugin: Pha 1: Nạp Plugin & Kiểm tra trạng thái
+    Note over Daemon,Plugin: Phase 1: Registration & Diagnostic Health Check
     Daemon->>Plugin: contribute(server) -> server.registerProvider(...)
     Daemon->>Plugin: status({ launch })
-    Plugin->>Subprocess: Kiểm tra CLI binary trên PATH (which agy / version)
-    Subprocess-->>Plugin: Exit code 0 (CLI sẵn sàng)
+    Plugin->>Subprocess: Check CLI binary on system PATH (which agy / version)
+    Subprocess-->>Plugin: Exit code 0 (CLI available & signed in)
     Plugin-->>Daemon: { available: true, models: [...] }
-    Daemon-->>Client: Hiển thị Provider & Models trên giao diện chọn Agent
+    Daemon-->>Client: Display Provider & Models in Agent Selector dropdown
 
-    Note over User,Subprocess: Pha 2: Khởi tạo phiên làm việc & Chạy Prompt
-    User->>Client: Gửi prompt với model "antigravity/default"
-    Client->>Daemon: Gửi request "agent.create" kèm worktree cwd
+    Note over User,Subprocess: Phase 2: Session Creation & Prompt Execution
+    User->>Client: Send prompt with model "antigravity/default"
+    Client->>Daemon: Send "agent.create" RPC request with workspace cwd
     Daemon->>Plugin: createSession({ cwd, model, capabilities })
-    Plugin->>Subprocess: Spawn CLI child process (stdio: pipe / JSON-RPC)
-    Plugin-->>Daemon: Trả về ProviderSession instance
+    Plugin->>Subprocess: Spawn child process (stdio: pipe / JSON-RPC)
+    Plugin-->>Daemon: Return ProviderSession instance
 
     Subprocess-->>Plugin: Stream stdout (thinking tokens, text chunks, tool calls)
     Plugin->>Daemon: Emit ProviderEvent ("chunk", "thinking", "diff")
-    Daemon-->>Client: Broadcast WebSocket cập nhật UI thời gian thực
+    Daemon-->>Client: Broadcast WebSocket events for real-time streaming UI
 
-    Subprocess-->>Plugin: Process kết thúc (Turn finished)
+    Subprocess-->>Plugin: Process exits (Turn completed)
     Plugin->>Daemon: Emit ProviderEvent ("turn.complete")
-    Daemon-->>Client: Cập nhật trạng thái hoàn thành & giải phóng tài nguyên
+    Daemon-->>Client: Update task completion state & release worktree resources
 ```
 
 ---
 
-## 3. Sơ đồ chi tiết luồng thu thập Hạn mức (Usage Source Polling & Discovery Flow)
+## 3. Usage Source Discovery & Polling Flow
 
-Sơ đồ trình tự mô tả cách các **Usage Source Plugins** tự động phát hiện thông tin cấu hình, quét token/quota định kỳ và cập nhật lên bảng thống kê của Paseo:
+Usage source plugins monitor quota consumption, window thresholds, and token spending across third-party LLM providers:
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant Daemon as Paseo Daemon
     participant Source as Usage Source Plugin (e.g. Claude / Codex)
-    participant LocalAuth as File hệ thống / Config cục bộ (~/.claude.json)
-    participant ProviderAPI as Nhà cung cấp API / Usage Endpoint
+    participant LocalAuth as Local File System / Config (~/.claude.json)
+    participant ProviderAPI as Upstream API / Usage Endpoint
     participant Client as Client Quota Dashboard
 
     Daemon->>Source: contribute(server) -> server.registerUsageSource(...)
     Daemon->>Source: discover(scope)
-    Source->>LocalAuth: Đọc token / cookie / auth config đã đăng nhập
-    LocalAuth-->>Source: Trả về thông tin credentials
+    Source->>LocalAuth: Inspect local login tokens, session cookies, or config files
+    LocalAuth-->>Source: Return detected credentials
     Source-->>Daemon: { discovered: true, account: "user@example.com" }
 
-    loop Định kỳ mỗi 30-60 giây hoặc khi có lượt chat mới
+    loop Polling interval (30-60s) or on new message turn
         Daemon->>Source: fetch(scope)
-        Source->>ProviderAPI: Gửi request truy vấn hạn mức (Rate Limits / Tokens used)
+        Source->>ProviderAPI: Query quota status (Rate Limits / Tokens consumed)
         ProviderAPI-->>Source: JSON Response (5-hour window, weekly limit, cost)
-        Source->>Source: Chuẩn hoá thành cấu trúc UsageMetrics chuẩn của Paseo
+        Source->>Source: Normalize data into Paseo's UsageMetrics schema
         Source-->>Daemon: UsageSnapshot (percentage, resetTime, remainingTokens)
-        Daemon-->>Client: Cập nhật thanh tiến trình hạn mức trên UI
+        Daemon-->>Client: Update usage progress bars & quota widgets on client UI
     end
 ```
 
 ---
 
-## 4. Danh sách các Built-in Plugins (`plugins/`)
+## 4. Built-in Plugins Catalog (`plugins/`)
 
-Thư mục `plugins/` hiện tích hợp sẵn 11 plugins cốt lõi:
+The `plugins/` directory contains 11 production-ready built-in plugins:
 
-| Plugin                         | Loại             | Mục đích                                           | Entry Point       | Phụ thuộc          |
-| :----------------------------- | :--------------- | :------------------------------------------------- | :---------------- | :----------------- |
-| **`antigravity-provider`**     | Provider         | Kết nối trực tiếp với Antigravity CLI (`agy`)      | `index.server.ts` | CLI `agy`          |
-| **`muse-provider`**            | Provider & Usage | Kết nối tác tử Muse Code CLI kiêm theo dõi usage   | `index.server.ts` | Muse CLI           |
-| **`claude-usage-source`**      | Usage Source     | Đọc hạn mức 5 giờ, tuần và token của Claude Code   | `index.server.ts` | `~/.claude.json`   |
-| **`codex-usage-source`**       | Usage Source     | Đọc token usage, quota và credits của OpenAI Codex | `index.server.ts` | Codex config       |
-| **`copilot-usage-source`**     | Usage Source     | Giám sát hạn mức tài khoản GitHub Copilot CLI      | `index.server.ts` | Copilot auth       |
-| **`cursor-usage-source`**      | Usage Source     | Giám sát usage và fast requests của Cursor         | `index.server.ts` | Cursor credentials |
-| **`grok-usage-source`**        | Usage Source     | Theo dõi hạn mức và số lượt gọi xAI Grok           | `index.server.ts` | Grok auth          |
-| **`kimi-usage-source`**        | Usage Source     | Theo dõi token limit và usage của Moonshot Kimi    | `index.server.ts` | Kimi config        |
-| **`minimax-usage-source`**     | Usage Source     | Theo dõi usage và quota của MiniMax                | `index.server.ts` | MiniMax API key    |
-| **`opencode-go-usage-source`** | Usage Source     | Theo dõi hạn mức OpenCode Go                       | `index.server.ts` | OpenCode config    |
-| **`zai-usage-source`**         | Usage Source     | Theo dõi usage của Zai / GLM models                | `index.server.ts` | Zai credentials    |
-
----
-
-## 5. Các Plugin ví dụ tham khảo (`plugin-examples/`)
-
-Nếu muốn phát triển thêm plugin mở rộng giao diện hoặc tính năng, bạn có thể tham khảo các ví dụ mẫu trong `plugin-examples/`:
-
-- `plugin-examples/provider-direct`: Ví dụ chuẩn tạo Provider kết nối trực tiếp CLI.
-- `plugin-examples/provider-acp-transformer`: Ví dụ Provider chuyển đổi qua chuẩn ACP (Agent Communication Protocol).
-- `plugin-examples/agent-configuration`: Thêm trường cấu hình tùy biến cho agent.
-- `plugin-examples/buttons`: Thêm nút bấm tương tác vào toolbar và chat box.
-- `plugin-examples/catppuccin`: Cung cấp theme màu sắc mới cho Paseo.
-- `plugin-examples/linear`: Tích hợp quản lý task Linear vào màn hình Paseo.
-- `plugin-examples/modal-ui`: Hiển thị modal tương tác người dùng.
-- `plugin-examples/timeline-items`: Chèn thêm thông tin/sự kiện vào dòng thời gian của hội thoại.
-- `plugin-examples/settings`: Đăng ký trang cài đặt plugin tùy biến trong Settings.
+| Plugin Directory               | Type             | Purpose & Description                              | Entry Point       | Prerequisites             |
+| :----------------------------- | :--------------- | :------------------------------------------------- | :---------------- | :------------------------ |
+| **`antigravity-provider`**     | Provider         | Bridges Paseo with the Antigravity CLI (`agy`)     | `index.server.ts` | `agy` CLI on PATH         |
+| **`muse-provider`**            | Provider & Usage | Integrates Muse Code CLI and tracks resource usage | `index.server.ts` | Muse CLI                  |
+| **`claude-usage-source`**      | Usage Source     | Tracks Claude Code 5-hour and weekly token limits  | `index.server.ts` | `~/.claude.json`          |
+| **`codex-usage-source`**       | Usage Source     | Monitors OpenAI Codex quota, tokens, and credits   | `index.server.ts` | Codex config              |
+| **`copilot-usage-source`**     | Usage Source     | Tracks GitHub Copilot CLI quota and plan status    | `index.server.ts` | GitHub CLI / Copilot auth |
+| **`cursor-usage-source`**      | Usage Source     | Monitors Cursor request counts and fast requests   | `index.server.ts` | Cursor credentials        |
+| **`grok-usage-source`**        | Usage Source     | Tracks xAI Grok usage and rate limits              | `index.server.ts` | Grok auth token           |
+| **`kimi-usage-source`**        | Usage Source     | Tracks Moonshot Kimi token limits and requests     | `index.server.ts` | Kimi config               |
+| **`minimax-usage-source`**     | Usage Source     | Monitors MiniMax API quota and balance             | `index.server.ts` | MiniMax API key           |
+| **`opencode-go-usage-source`** | Usage Source     | Monitors OpenCode Go token limits                  | `index.server.ts` | OpenCode config           |
+| **`zai-usage-source`**         | Usage Source     | Tracks Zai / GLM model limits and metrics          | `index.server.ts` | Zai credentials           |
 
 ---
 
-## 6. Hướng dẫn tạo Plugin mới
+## 5. Publishing to the Official Paseo Plugin Registry
 
-Cấu trúc thư mục tối thiểu của một plugin:
+The official Paseo Plugin Registry is hosted at **`https://plugins.paseo.sh`** (backed by the [getpaseo/plugins](https://github.com/getpaseo/plugins) GitHub repository). Once published, users worldwide can install your plugin with a single command:
 
-```
-my-custom-plugin/
-├── paseo-plugin.json      # Metadata và khai báo capabilities
-├── icon.svg              # Icon nhận diện
-└── index.server.ts       # Server entry point thực thi trên Paseo Daemon
+```bash
+paseo plugin add owner/slug
 ```
 
-### Ví dụ file `paseo-plugin.json`:
+### Step 1: Plugin Manifest (`paseo-plugin.json`)
+
+Your plugin directory must include a valid `paseo-plugin.json`:
 
 ```json
 {
-  "id": "my-custom-provider",
-  "name": "My Custom Provider",
+  "id": "my-username/my-awesome-plugin",
+  "name": "My Awesome Plugin",
   "version": "1.0.0",
-  "server": "./index.server.ts"
+  "description": "High-performance coding agent provider for Paseo",
+  "license": "Apache-2.0",
+  "server": "./index.server.ts",
+  "icon": "./icon.svg",
+  "categories": ["providers", "tools"]
 }
 ```
 
-### Ví dụ file `index.server.ts`:
+- **`id`**: Must match `^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$` (e.g. `luongndcoder/antigravity-provider`).
+- **`icon`**: An SVG or PNG file representing your plugin.
+- **`server`**: Entry point for server-side logic (`PluginServerContext`).
+- **`client`** _(optional)_: Entry point for UI extensions (`PluginClientContext`).
 
-```ts
-import type { PluginServerContext } from "@getpaseo/plugin/server";
+### Step 2: Choose Distribution Method (npm vs. Git)
 
-export default function contribute(server: PluginServerContext) {
-  // Đăng ký Provider hoặc Usage Source hoặc Hooks
-  return () => {
-    // Cleanup khi plugin bị disable hoặc server tắt
-  };
-}
-```
+Paseo supports two artifact distribution kinds:
 
-Để kiểm tra tính hợp lệ về kiểu dữ liệu toàn bộ plugin:
+1. **npm Package (Recommended)**:
+   - Publish your plugin to npm:
+     ```bash
+     npm publish --access public
+     ```
+   - The registry verifies package name, version, tarball URL, and `sha512` integrity.
+2. **Git Repository**:
+   - Host your plugin repository on GitHub (or GitLab).
+   - The registry pins the specific commit SHA (and optional `pluginPath` if in a monorepo).
+
+### Step 3: Submit to the Registry Repository
+
+1. Fork the official registry repository: **[github.com/getpaseo/plugins](https://github.com/getpaseo/plugins)**.
+2. Create a metadata descriptor file under `plugins/<owner>/<slug>.json`:
+   ```json
+   {
+     "id": "luongndcoder/antigravity-provider",
+     "name": "Antigravity Provider",
+     "description": "Native integration for Antigravity coding agents",
+     "categories": ["providers"],
+     "author": {
+       "github": "luongndcoder",
+       "name": "Luong Nguyen"
+     },
+     "repository": {
+       "url": "https://github.com/luongndcoder/antigravity-plugin"
+     },
+     "artifact": {
+       "kind": "git",
+       "remote": "https://github.com/luongndcoder/antigravity-plugin.git",
+       "commit": "8f3e2b10a4c5..."
+     },
+     "media": [
+       "https://raw.githubusercontent.com/luongndcoder/antigravity-plugin/main/assets/preview.png"
+     ]
+   }
+   ```
+3. Open a Pull Request against `getpaseo/plugins:main`.
+4. After review and merge, your plugin appears instantly on **[paseo.sh/plugins](https://paseo.sh/plugins)** and is installable via `paseo plugin add <owner>/<slug>`.
+
+### Installing Prior to Registry Approval
+
+Before or during registry review, users can test and install your plugin directly:
 
 ```bash
-npm run typecheck --workspace=@getpaseo/builtin-plugins
+# Install directly from GitHub
+paseo plugin add github:owner/repo
+
+# Install from a local directory
+paseo plugin add ./path/to/my-plugin
 ```
+
+---
+
+## 6. Developing a New Plugin Locally
+
+1. Create a directory for your plugin:
+   ```bash
+   mkdir -p my-plugin && cd my-plugin
+   ```
+2. Initialize `paseo-plugin.json` and `index.server.ts`:
+
+   ```ts
+   import type { PluginServerContext } from "@getpaseo/plugin/server";
+
+   export default function contribute(server: PluginServerContext) {
+     // Register providers, usage sources, or lifecycle hooks
+     return () => {
+       // Cleanup resources on plugin disable or daemon shutdown
+     };
+   }
+   ```
+
+3. Verify TypeScript typings across the monorepo:
+   ```bash
+   npm run typecheck --workspace=@getpaseo/builtin-plugins
+   ```
+4. Test locally with the daemon:
+   ```bash
+   paseo plugin add ./my-plugin
+   ```

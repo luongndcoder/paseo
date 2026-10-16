@@ -1,60 +1,60 @@
-# Plugin Examples (Các Plugin Mẫu của Paseo)
+# Paseo Plugin Examples
 
-Thư mục này chứa các ví dụ mẫu (sample plugins) minh họa cách xây dựng và mở rộng tính năng trong hệ sinh thái Paseo, từ việc tích hợp giao diện người dùng (UI components), các móc nối vòng đời (lifecycle hooks), đến các bộ chuyển đổi tác tử (agent providers & ACP transformers).
+This directory provides official sample plugins demonstrating how to extend and customize the Paseo ecosystem — ranging from custom UI components and theme palettes to agent lifecycle hooks, service integrations, and direct CLI agent providers.
 
 ---
 
-## Sơ đồ phân loại các Plugin Mẫu
+## Plugin Examples Classification
 
 ```mermaid
 flowchart TD
-    subgraph Examples["Plugin Examples"]
-        subgraph UIComponents["Tương tác Giao diện & Trải nghiệm (UI & UX)"]
-            Btn["buttons<br/>(Thêm nút bấm tương tác)"]
-            Modal["modal-ui<br/>(Hộp thoại Modal đa năng)"]
-            Theme["catppuccin<br/>(Tùy biến Theme giao diện)"]
-            Timeline["timeline-items<br/>(Widget trong luồng chat)"]
-            Inline["inline-thinking<br/>(Hiển thị suy nghĩ của agent)"]
+    subgraph Examples["Paseo Plugin Examples"]
+        subgraph UIComponents["User Interface & Experience (UI & UX)"]
+            Btn["buttons<br/>(Toolbar action buttons)"]
+            Modal["modal-ui<br/>(Interactive dialogs & forms)"]
+            Theme["catppuccin<br/>(Custom UI color themes)"]
+            Timeline["timeline-items<br/>(Rich message cards in conversation stream)"]
+            Inline["inline-thinking<br/>(Agent chain-of-thought renderer)"]
         end
 
-        subgraph Integration["Tích hợp Dịch vụ & Cấu hình"]
-            Linear["linear<br/>(Tích hợp quản lý task Linear)"]
-            Settings["settings<br/>(Trang cấu hình plugin trong Settings)"]
-            AgentConfig["agent-configuration<br/>(Tùy biến tham số khởi chạy Agent)"]
-            Hosts["hosts<br/>(Quản lý các máy chủ daemon)"]
+        subgraph Integration["Services & Workspace Configuration"]
+            Linear["linear<br/>(Linear project management sync)"]
+            Settings["settings<br/>(Custom plugin settings panel)"]
+            AgentConfig["agent-configuration<br/>(Custom agent parameters & options)"]
+            Hosts["hosts<br/>(Remote daemon host status)"]
         end
 
-        subgraph ProvidersLifecycle["Nhà cung cấp & Vòng đời Tác tử"]
-            Direct["provider-direct<br/>(Tự tạo Provider giao tiếp CLI)"]
-            ACP["provider-acp-transformer<br/>(Chuyển đổi qua giao thức ACP)"]
-            Actions["lifecycle-actions<br/>(Tự động kích hoạt hành động)"]
-            Logger["lifecycle-logger<br/>(Ghi log chi tiết vòng đời turn)"]
-            Local["local-plugin<br/>(Cách nạp plugin từ thư mục local)"]
+        subgraph ProvidersLifecycle["Agent Providers & Lifecycle Hooks"]
+            Direct["provider-direct<br/>(Native CLI provider integration)"]
+            ACP["provider-acp-transformer<br/>(Agent Communication Protocol adapter)"]
+            Actions["lifecycle-actions<br/>(Post-turn automated triggers)"]
+            Logger["lifecycle-logger<br/>(Lifecycle event inspection)"]
+            Local["local-plugin<br/>(Local development workflow)"]
         end
     end
 ```
 
 ---
 
-## Danh sách chi tiết các thư mục ví dụ
+## Detailed Directory Catalog
 
-| Thư mục                        | Chức năng chính                                                   | Tài liệu chi tiết                                                          |
-| :----------------------------- | :---------------------------------------------------------------- | :------------------------------------------------------------------------- |
-| **`buttons`**                  | Thêm các nút hành động nhanh vào thanh công cụ                    | [`buttons/README.md`](buttons/README.md)                                   |
-| **`modal-ui`**                 | Mở modal tùy biến cho người dùng điền biểu mẫu hoặc chọn tùy chọn | [`modal-ui/README.md`](modal-ui/README.md)                                 |
-| **`catppuccin`**               | Định nghĩa và áp dụng bảng màu theme Catppuccin cho giao diện     | [`catppuccin/README.md`](catppuccin/README.md)                             |
-| **`timeline-items`**           | Hiển thị các khối thông tin mở rộng trên dòng thời gian hội thoại | [`timeline-items/README.md`](timeline-items/README.md)                     |
-| **`inline-thinking`**          | Tùy biến hiển thị khối suy nghĩ (chain-of-thought) của tác tử     | [`inline-thinking/README.md`](inline-thinking/README.md)                   |
-| **`linear`**                   | Kết nối API Linear để đồng bộ issues vào workspace                | [`linear/README.md`](linear/README.md)                                     |
-| **`settings`**                 | Thêm tab cài đặt riêng cho plugin trong giao diện Preferences     | [`settings/README.md`](settings/README.md)                                 |
-| **`agent-configuration`**      | Mở rộng form cấu hình agent (nhiệt độ, system prompt, mode)       | [`agent-configuration/README.md`](agent-configuration/README.md)           |
-| **`hosts`**                    | Quản lý và theo dõi danh sách các host/server được kết nối        | [`hosts/`](hosts/)                                                         |
-| **`provider-direct`**          | Tạo một Agent Provider mới kết nối trực tiếp với CLI              | [`provider-direct/README.md`](provider-direct/README.md)                   |
-| **`provider-acp-transformer`** | Chuyển đổi dữ liệu giữa Paseo và Agent Communication Protocol     | [`provider-acp-transformer/README.md`](provider-acp-transformer/README.md) |
-| **`lifecycle-actions`**        | Đăng ký các hành động chạy tự động sau mỗi turn của agent         | [`lifecycle-actions/README.md`](lifecycle-actions/README.md)               |
-| **`lifecycle-logger`**         | Lắng nghe và ghi nhật ký sự kiện vòng đời phục vụ debug           | [`lifecycle-logger/README.md`](lifecycle-logger/README.md)                 |
-| **`local-plugin`**             | Hướng dẫn cấu hình nạp plugin trực tiếp từ đường dẫn máy local    | [`local-plugin/`](local-plugin/)                                           |
+| Directory                      | Key Capabilities                                                     | Documentation Link                                                         |
+| :----------------------------- | :------------------------------------------------------------------- | :------------------------------------------------------------------------- |
+| **`buttons`**                  | Adds custom interactive action buttons to the chat bar and toolbar   | [`buttons/README.md`](buttons/README.md)                                   |
+| **`modal-ui`**                 | Displays interactive modals for user input, forms, and confirmations | [`modal-ui/README.md`](modal-ui/README.md)                                 |
+| **`catppuccin`**               | Custom design palette implementing the Catppuccin color scheme       | [`catppuccin/README.md`](catppuccin/README.md)                             |
+| **`timeline-items`**           | Renders custom rich cards inside the conversation timeline           | [`timeline-items/README.md`](timeline-items/README.md)                     |
+| **`inline-thinking`**          | Renders and formats live agent reasoning tokens (chain-of-thought)   | [`inline-thinking/README.md`](inline-thinking/README.md)                   |
+| **`linear`**                   | Connects to Linear to display issues and automate workspace tracking | [`linear/README.md`](linear/README.md)                                     |
+| **`settings`**                 | Registers a dedicated plugin configuration tab in Preferences        | [`settings/README.md`](settings/README.md)                                 |
+| **`agent-configuration`**      | Extends agent launch options (temperature, system prompt, flags)     | [`agent-configuration/README.md`](agent-configuration/README.md)           |
+| **`hosts`**                    | Manages remote daemon connections and host diagnostics               | [`hosts/`](hosts/)                                                         |
+| **`provider-direct`**          | Implements a custom agent provider communicating directly with a CLI | [`provider-direct/README.md`](provider-direct/README.md)                   |
+| **`provider-acp-transformer`** | Transforms streams to and from Agent Communication Protocol format   | [`provider-acp-transformer/README.md`](provider-acp-transformer/README.md) |
+| **`lifecycle-actions`**        | Triggers automated workflows whenever an agent completes a turn      | [`lifecycle-actions/README.md`](lifecycle-actions/README.md)               |
+| **`lifecycle-logger`**         | Logs lifecycle events for debugging and analytics                    | [`lifecycle-logger/README.md`](lifecycle-logger/README.md)                 |
+| **`local-plugin`**             | Example demonstrating how to develop and link a local plugin         | [`local-plugin/`](local-plugin/)                                           |
 
 ---
 
-> 💡 **Xem thêm tài liệu kiến trúc toàn diện của hệ thống Plugin tại:** **[`plugins/README.md`](../plugins/README.md)**
+> 💡 **For architecture details and publishing instructions, see:** **[`plugins/README.md`](../plugins/README.md)**
