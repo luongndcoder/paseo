@@ -25,6 +25,7 @@ import type {
   TerminalsChangedEvent,
   TerminalsChangedListener,
 } from "./terminal-manager.js";
+import { forkStdioTerminalWorker, isRustTerminalWorkerEnabled } from "./stdio-terminal-worker.js";
 import type {
   TerminalWorkerRequest,
   TerminalWorkerResponse,
@@ -140,6 +141,9 @@ function cloneTerminalInfo(info: RequiredWorkerTerminalInfo): RequiredWorkerTerm
 }
 
 function forkTerminalWorker(): TerminalWorkerProcess {
+  if (isRustTerminalWorkerEnabled()) {
+    return forkStdioTerminalWorker();
+  }
   return fork(fileURLToPath(resolveWorkerUrl()), [], {
     execArgv: resolveWorkerExecArgv(),
     serialization: "advanced",
