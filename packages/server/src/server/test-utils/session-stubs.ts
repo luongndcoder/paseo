@@ -16,7 +16,7 @@ import {
 } from "../agent/provider-snapshot-manager.js";
 import type { SessionOptions } from "../session.js";
 import type { SessionOutboundMessage } from "@getpaseo/protocol/messages";
-import { asInternals, createStub } from "./class-mocks.js";
+import { createStub } from "./class-mocks.js";
 
 // ---------------------------------------------------------------------------
 // Typed stub wrappers — unsafe cast is in createStub (class-mocks.ts), never
@@ -115,7 +115,40 @@ export function asWorkspaceScriptRuntimeStore(stub: {
 // Private session access — delegates to asInternals so test files need no cast
 // ---------------------------------------------------------------------------
 
-export { asInternals as asSessionInternals };
+// Workspace-domain methods moved onto WorkspaceSession. Tests keep addressing them on the
+// session; reads return a bound function and writes replace the method on the owner so the
+// session's own internal callers see the override.
+const WORKSPACE_SESSION_METHODS = new Set([
+  "buildWorkspaceDescriptorMap",
+  "describeWorkspaceRecord",
+  "describeWorkspaceRecordWithGitData",
+  "markWorkspaceArchiving",
+  "clearWorkspaceArchiving",
+  "emitWorkspaceUpdateForCwd",
+  "emitWorkspaceUpdatesForWorkspaceIds",
+  "listFetchWorkspacesEntries",
+  "archiveWorkspaceRecord",
+]);
+
+export function asSessionInternals<T>(session: unknown): T {
+  const target = session as { workspaceSession?: Record<string, unknown> };
+  return new Proxy(target, {
+    get(obj, key) {
+      if (typeof key === "string" && WORKSPACE_SESSION_METHODS.has(key) && obj.workspaceSession) {
+        const method = obj.workspaceSession[key] as (...args: unknown[]) => unknown;
+        return method.bind(obj.workspaceSession);
+      }
+      return Reflect.get(obj, key);
+    },
+    set(obj, key, value) {
+      if (typeof key === "string" && WORKSPACE_SESSION_METHODS.has(key) && obj.workspaceSession) {
+        obj.workspaceSession[key] = value;
+        return true;
+      }
+      return Reflect.set(obj, key, value);
+    },
+  }) as T;
+}
 
 // ---------------------------------------------------------------------------
 // Type guard for SessionOutboundMessage — avoids casting unknown in test emit overrides
