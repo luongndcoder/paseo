@@ -19,6 +19,7 @@ The first carves shipped as **deep modules with a narrow Host seam**, not the `d
 
 - **#1640 — VoiceSession** (`session/voice/voice-session.ts`, seam `VoiceSessionHost`): the STT/TTS/dictation/turn-detection subsystem. _(Originally landed at `server/voice/`; relocated under `session/` so all session subsystems share one home.)_
 - **#1644 — CheckoutSession, read side** (`session/checkout/checkout-session.ts`, seam `CheckoutSessionHost`, port `CheckoutDiffSubscriber`): status, branch validate/suggest, diff subscribe/unsubscribe, manual refresh. The workspace-git observer already delegates `emitStatusUpdate`/`scheduleDiffRefresh` to it.
+- **Slice 3 — observer seams:** workspace-git observer service with injected callbacks, and the agent-subscribe callback split into named handlers (see Slice 3).
 - **ScheduleSession** (`session/schedule/schedule-session.ts`, seam `ScheduleSessionHost`): scheduled-agent request handling.
 
 **Next carve — CheckoutSession mutation side (Slice 4 below).** The 17 checkout _write_ handlers still inline in `session.ts` (`dispatchCheckoutMessage`, ~2010) — branch switch/rename, commit, merge, merge-from-base, pull, push, PR create/merge, github set-auto-merge/get-check-details, PR status, PR timeline, github search, stash save/pop/list — move into the existing `session/checkout/checkout-session.ts` behind `CheckoutSessionHost`. The Slice-3 observer entanglement the table fears is already resolved: #1644 moved the status/diff read side into CheckoutSession, so the workspace observer delegates today and this no longer blocks on the WorkspaceController split.
@@ -56,14 +57,12 @@ The task recommended **git/checkout as the first slice — OVERRIDDEN.** Verific
 
 ---
 
-## Slice 3 — Split the shared observer seams (prerequisite, no controller)
+## Slice 3 — Split the shared observer seams (shipped)
 
-In-place refactor on the shell, two named fan-outs:
+1. **workspace-git observer:** `session/workspace-git-observer/workspace-git-observer-service.ts` takes `emitWorkspaceUpdateForCwd`, `emitStatusUpdate` (wired to `CheckoutSession.emitStatusUpdate`) and `onBranchChanged` as injected callbacks. Its test asserts one snapshot change fires both the workspace update and the checkout status update.
+2. **agentManager.subscribe callback:** `subscribeToAgentEvents` in `session.ts` is a thin router over `onAgentUpdate`, `onProviderSubagentEvent`, `shouldAutoAllowVoicePermission` + `autoAllowVoicePermission`, and `onStreamEvent`. The auto-allow predicate is the pure `shouldAutoAllowVoicePermission` in `voice-permission-policy.ts`, covered by `voice-permission-policy.test.ts`. Slice 7 moves it into VoiceSession.
 
-1. **workspace-git observer** (4910-4917): make `emitCheckoutStatusUpdate` and `onBranchChanged` injectable callbacks; keep `workspaceGitWatchTargets`/`workspaceGitSubscriptions` shared by reference.
-2. **agentManager.subscribe callback** (~1298): refactor into `{ onAgentUpdate, shouldAutoAllowVoicePermission(event), onStreamEvent }`.
-
-**Behavior note:** the single hardest seam, split exactly once before the two domains that co-own it. The observer fires BOTH workspace (`handleWorkspaceGitBranchSnapshot`, `emitWorkspaceUpdateForCwd`) and checkout (`emitCheckoutStatusUpdate`) effects; the agent-subscribe callback is invoked by agent EVENTS (not the `??` chain) and does lifecycle + voice work. Add a test asserting BOTH a `workspace_update` and a `checkout_status_update` fire from one simulated git snapshot change, and a voice-permission test for the auto-allow path. **Tests:** `session.workspace-git-watch.test.ts`, `session.workspaces.test.ts`, `voice-permission-policy.test.ts`, `session.test.ts`.
+The agent-subscribe callback is invoked by agent events, not the `??` chain.
 
 ---
 

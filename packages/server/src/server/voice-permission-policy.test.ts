@@ -1,7 +1,11 @@
 import { describe, expect, test } from "vitest";
 
 import type { AgentPermissionRequest } from "./agent/agent-sdk-types.js";
-import { isVoicePermissionAllowed } from "./voice-permission-policy.js";
+import type { AgentStreamEvent } from "./agent/agent-sdk-types.js";
+import {
+  isVoicePermissionAllowed,
+  shouldAutoAllowVoicePermission,
+} from "./voice-permission-policy.js";
 
 function buildRequest(partial: Partial<AgentPermissionRequest>): AgentPermissionRequest {
   return {
@@ -45,5 +49,41 @@ describe("isVoicePermissionAllowed", () => {
       }),
     );
     expect(denied).toBe(false);
+  });
+});
+
+describe("shouldAutoAllowVoicePermission", () => {
+  const requested = (name: string): AgentStreamEvent =>
+    ({
+      type: "permission_requested",
+      provider: "codex",
+      request: buildRequest({ name }),
+    }) as AgentStreamEvent;
+
+  test("allows a speak request when voice is active for the agent", () => {
+    expect(
+      shouldAutoAllowVoicePermission({ voiceActiveForAgent: true, event: requested("speak") }),
+    ).toBe(true);
+  });
+
+  test("denies when voice is not active for the agent", () => {
+    expect(
+      shouldAutoAllowVoicePermission({ voiceActiveForAgent: false, event: requested("speak") }),
+    ).toBe(false);
+  });
+
+  test("denies non-speak requests and non-request events", () => {
+    expect(
+      shouldAutoAllowVoicePermission({
+        voiceActiveForAgent: true,
+        event: requested("mcp__paseo__create_agent"),
+      }),
+    ).toBe(false);
+    expect(
+      shouldAutoAllowVoicePermission({
+        voiceActiveForAgent: true,
+        event: { type: "turn_started", provider: "codex" } as AgentStreamEvent,
+      }),
+    ).toBe(false);
   });
 });

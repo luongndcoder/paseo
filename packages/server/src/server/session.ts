@@ -167,7 +167,7 @@ import {
   type WorkspaceRegistry,
 } from "./workspace-registry.js";
 import { wrapSpokenInput } from "./voice-config.js";
-import { isVoicePermissionAllowed } from "./voice-permission-policy.js";
+import { shouldAutoAllowVoicePermission } from "./voice-permission-policy.js";
 import {
   ProjectIconReader,
   removeProjectCustomIcon,
@@ -1936,103 +1936,123 @@ export class Session {
           this.deliverTimelineReplacement(event.agentId, this.rewindInitiators.get(event.agentId));
           return;
         }
-
         if (event.type === "agent_state") {
-          this.sessionLogger.trace(
-            {
-              agentId: event.agent.id,
-              provider: event.agent.provider,
-              providerSessionId: event.agent.persistence?.sessionId ?? undefined,
-              turnId: event.agent.activeForegroundTurnId ?? undefined,
-              lifecycle: event.agent.lifecycle,
-            },
-            "agent.session.forward_update",
-          );
-          void this.agentUpdates.forwardLiveAgent(event.agent);
+          this.onAgentUpdate(event);
           return;
         }
-
         if (event.type === "provider_subagent") {
-          // The subagents track of an internal parent stays hidden.
-          const parentAgentId =
-            event.event.type === "upsert"
-              ? event.event.subagent.parentAgentId
-              : event.event.parentAgentId;
-          if (this.agentManager.getAgent(parentAgentId)?.internal) return;
-          this.emitProviderSubagentWorkspaceUpdate(event.event);
-          this.forwardProviderSubagentUpdate(event.event);
+          this.onProviderSubagentEvent(event);
           return;
         }
-
-        if (
-          this.voiceSessions.isActiveForAgent(event.agentId) &&
-          event.event.type === "permission_requested" &&
-          isVoicePermissionAllowed(event.event.request)
-        ) {
-          const requestId = event.event.request.id;
-          void this.agentManager
-            .respondToPermission(event.agentId, requestId, {
-              behavior: "allow",
-            })
-            .catch((error) => {
-              this.sessionLogger.warn(
-                {
-                  err: error,
-                  agentId: event.agentId,
-                  requestId,
-                },
-                "Failed to auto-allow speak tool permission in voice mode",
-              );
-            });
+        if (this.shouldAutoAllowVoicePermission(event)) {
+          this.autoAllowVoicePermission(event);
         }
-
-        const serializedEvent = serializeAgentStreamEvent(event.event);
-        if (!serializedEvent) {
-          return;
-        }
-        this.sessionLogger.trace(
-          {
-            agentId: event.agentId,
-            provider: event.event.provider,
-            turnId: getAgentStreamEventTurnId(event.event),
-            seq: event.seq,
-            epoch: event.epoch,
-            event: event.event,
-          },
-          "agent.session.forward_stream",
-        );
-
-        this.forwardAgentStream(event, serializedEvent);
-
-        // An internal agent streams only to clients subscribed to it by id;
-        // session-wide prompts would surface it everywhere.
-        const internal = this.agentManager.getAgent(event.agentId)?.internal === true;
-        if (event.event.type === "permission_requested" && !internal) {
-          this.emit({
-            type: "agent_permission_request",
-            payload: {
-              agentId: event.agentId,
-              request: event.event.request,
-            },
-          });
-        } else if (event.event.type === "permission_resolved") {
-          // A provider event is not the outcome of whichever request is currently running.
-          this.emitSubscribedEvent({
-            type: "agent_permission_resolved",
-            payload: {
-              agentId: event.agentId,
-              requestId: event.event.requestId,
-              resolution: event.event.resolution,
-            },
-          });
-        }
-
-        // Title updates may be applied asynchronously after agent creation.
+        this.onStreamEvent(event);
       },
       // Internal agents flow through so exact-id subscribers and opted-in
       // listings see them; everything else above filters them out.
       { replayState: false, includeInternal: true },
     );
+  }
+
+  private onAgentUpdate(event: Extract<AgentManagerEvent, { type: "agent_state" }>): void {
+    this.sessionLogger.trace(
+      {
+        agentId: event.agent.id,
+        provider: event.agent.provider,
+        providerSessionId: event.agent.persistence?.sessionId ?? undefined,
+        turnId: event.agent.activeForegroundTurnId ?? undefined,
+        lifecycle: event.agent.lifecycle,
+      },
+      "agent.session.forward_update",
+    );
+    void this.agentUpdates.forwardLiveAgent(event.agent);
+  }
+
+  private onProviderSubagentEvent(
+    event: Extract<AgentManagerEvent, { type: "provider_subagent" }>,
+  ): void {
+    // The subagents track of an internal parent stays hidden.
+    const parentAgentId =
+      event.event.type === "upsert"
+        ? event.event.subagent.parentAgentId
+        : event.event.parentAgentId;
+    if (this.agentManager.getAgent(parentAgentId)?.internal) return;
+    this.emitProviderSubagentWorkspaceUpdate(event.event);
+    this.forwardProviderSubagentUpdate(event.event);
+  }
+
+  private shouldAutoAllowVoicePermission(
+    event: Extract<AgentManagerEvent, { type: "agent_stream" }>,
+  ): boolean {
+    return shouldAutoAllowVoicePermission({
+      voiceActiveForAgent: this.voiceSessions.isActiveForAgent(event.agentId),
+      event: event.event,
+    });
+  }
+
+  private autoAllowVoicePermission(
+    event: Extract<AgentManagerEvent, { type: "agent_stream" }>,
+  ): void {
+    if (event.event.type !== "permission_requested") return;
+    const requestId = event.event.request.id;
+    void this.agentManager
+      .respondToPermission(event.agentId, requestId, {
+        behavior: "allow",
+      })
+      .catch((error) => {
+        this.sessionLogger.warn(
+          {
+            err: error,
+            agentId: event.agentId,
+            requestId,
+          },
+          "Failed to auto-allow speak tool permission in voice mode",
+        );
+      });
+  }
+
+  private onStreamEvent(event: Extract<AgentManagerEvent, { type: "agent_stream" }>): void {
+    const serializedEvent = serializeAgentStreamEvent(event.event);
+    if (!serializedEvent) {
+      return;
+    }
+    this.sessionLogger.trace(
+      {
+        agentId: event.agentId,
+        provider: event.event.provider,
+        turnId: getAgentStreamEventTurnId(event.event),
+        seq: event.seq,
+        epoch: event.epoch,
+        event: event.event,
+      },
+      "agent.session.forward_stream",
+    );
+
+    this.forwardAgentStream(event, serializedEvent);
+
+    // An internal agent streams only to clients subscribed to it by id;
+    // session-wide prompts would surface it everywhere.
+    const internal = this.agentManager.getAgent(event.agentId)?.internal === true;
+    if (event.event.type === "permission_requested" && !internal) {
+      this.emit({
+        type: "agent_permission_request",
+        payload: {
+          agentId: event.agentId,
+          request: event.event.request,
+        },
+      });
+    } else if (event.event.type === "permission_resolved") {
+      // A provider event is not the outcome of whichever request is currently running.
+      this.emitSubscribedEvent({
+        type: "agent_permission_resolved",
+        payload: {
+          agentId: event.agentId,
+          requestId: event.event.requestId,
+          resolution: event.event.resolution,
+        },
+      });
+    }
   }
 
   private emitProviderSubagentWorkspaceUpdate(event: ProviderSubagentManagerEvent): void {
