@@ -26,6 +26,12 @@ const PluginManifestSchema = z.object({
   id: PluginIdSchema,
   name: z.string().trim().min(1).optional(),
   description: z.string().trim().min(1).optional(),
+  tags: z.array(z.string().trim().min(1)).optional(),
+  keywords: z.array(z.string().trim().min(1)).optional(),
+  categories: z.array(z.string().trim().min(1)).optional(),
+  license: z.string().trim().min(1).optional(),
+  homepage: z.string().url().optional(),
+  repository: z.string().url().optional(),
   icon: PluginAssetPathSchema.refine(
     (value) => /\.png$/i.test(value),
     "Expected a relative path to a PNG",

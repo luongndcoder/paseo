@@ -1,1 +1,12 @@
-{ "id": "opencode-go-usage-source", "requirements": { "paseo": ">=0.9.2" } }
+{
+  "id": "opencode-go-usage-source",
+  "name": "OpenCode Go Usage Source",
+  "description": "Monitor OpenCode Go / Pi developer token usage and concurrency limits.",
+  "tags": ["opencode", "opencode-go", "pi", "usage", "quota", "monitoring"],
+  "keywords": ["opencode", "pi-dev", "token-usage"],
+  "categories": ["usage-sources", "monitoring", "developer-tools"],
+  "repository": "https://github.com/luongndcoder/paseo",
+  "requirements": {
+    "paseo": ">=0.9.2"
+  }
+}

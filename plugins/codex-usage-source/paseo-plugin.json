@@ -1,1 +1,12 @@
-{ "id": "codex-usage-source", "requirements": { "paseo": ">=0.11.0" } }
+{
+  "id": "codex-usage-source",
+  "name": "Codex Usage Source",
+  "description": "Live token consumption and quota tracker for OpenAI Codex sessions.",
+  "tags": ["codex", "openai", "usage", "quota", "token-metrics", "gpt-5", "rate-limits"],
+  "keywords": ["codex", "openai", "token-counter", "limits"],
+  "categories": ["usage-sources", "monitoring", "developer-tools"],
+  "repository": "https://github.com/luongndcoder/paseo",
+  "requirements": {
+    "paseo": ">=0.11.0"
+  }
+}

@@ -1,1 +1,12 @@
-{ "id": "muse-provider", "requirements": { "paseo": ">=0.11.0" } }
+{
+  "id": "muse-provider",
+  "name": "Muse Code Provider",
+  "description": "Connect Muse Code agent CLI to Paseo for automated coding, reasoning, and multi-turn refactoring.",
+  "tags": ["muse", "muse-code", "agent", "provider", "coding-assistant", "developer-tools"],
+  "keywords": ["muse", "ai-coding", "provider", "developer-tools"],
+  "categories": ["providers", "ai-agents", "developer-tools"],
+  "repository": "https://github.com/luongndcoder/paseo",
+  "requirements": {
+    "paseo": ">=0.11.0"
+  }
+}

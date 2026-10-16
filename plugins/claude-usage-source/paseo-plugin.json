@@ -1,1 +1,12 @@
-{ "id": "claude-usage-source", "requirements": { "paseo": ">=0.9.2" } }
+{
+  "id": "claude-usage-source",
+  "name": "Claude Usage Source",
+  "description": "Real-time token usage, billing cost tracking, and rate limit monitor for Anthropic Claude Code accounts.",
+  "tags": ["claude", "anthropic", "usage", "quota", "cost-tracking", "rate-limits", "tokens"],
+  "keywords": ["claude-code", "token-usage", "metrics", "monitoring"],
+  "categories": ["usage-sources", "monitoring", "developer-tools"],
+  "repository": "https://github.com/luongndcoder/paseo",
+  "requirements": {
+    "paseo": ">=0.9.2"
+  }
+}

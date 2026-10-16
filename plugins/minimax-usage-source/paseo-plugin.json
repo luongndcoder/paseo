@@ -1,1 +1,12 @@
-{ "id": "minimax-usage-source", "requirements": { "paseo": ">=0.9.2" } }
+{
+  "id": "minimax-usage-source",
+  "name": "MiniMax Usage Source",
+  "description": "Track MiniMax API token usage, concurrency, and rate limit status.",
+  "tags": ["minimax", "usage", "quota", "tokens", "monitoring"],
+  "keywords": ["minimax", "api-quota", "usage"],
+  "categories": ["usage-sources", "monitoring", "developer-tools"],
+  "repository": "https://github.com/luongndcoder/paseo",
+  "requirements": {
+    "paseo": ">=0.9.2"
+  }
+}

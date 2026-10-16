@@ -1,1 +1,12 @@
-{ "id": "grok-usage-source", "requirements": { "paseo": ">=0.9.2" } }
+{
+  "id": "grok-usage-source",
+  "name": "Grok Usage Source",
+  "description": "Track xAI Grok API token quotas, credits, and active rate limits.",
+  "tags": ["grok", "xai", "usage", "quota", "tokens", "monitoring"],
+  "keywords": ["grok", "xai", "token-usage"],
+  "categories": ["usage-sources", "monitoring", "developer-tools"],
+  "repository": "https://github.com/luongndcoder/paseo",
+  "requirements": {
+    "paseo": ">=0.9.2"
+  }
+}

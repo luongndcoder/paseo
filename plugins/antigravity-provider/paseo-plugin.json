@@ -1,1 +1,20 @@
-{ "id": "antigravity-provider", "requirements": { "paseo": ">=0.10.0" } }
+{
+  "id": "antigravity-provider",
+  "name": "Antigravity Provider",
+  "description": "Run Google Antigravity agents directly within Paseo with full streaming tool calls, subagents, and rich developer workflows.",
+  "tags": [
+    "antigravity",
+    "agent",
+    "google-antigravity",
+    "agy",
+    "provider",
+    "autonomous-agents",
+    "developer-tools"
+  ],
+  "keywords": ["antigravity", "agentic", "ai-pair-programming", "subagents", "coding-agent"],
+  "categories": ["providers", "ai-agents", "developer-tools"],
+  "repository": "https://github.com/luongndcoder/paseo",
+  "requirements": {
+    "paseo": ">=0.10.0"
+  }
+}

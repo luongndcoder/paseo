@@ -2,6 +2,24 @@
   "name": "@getpaseo/builtin-plugins",
   "version": "0.11.2",
   "private": true,
+  "description": "Built-in provider adapters and usage tracking plugins for Paseo",
+  "keywords": [
+    "ai-agents",
+    "antigravity",
+    "claude",
+    "codex",
+    "coding-agents",
+    "copilot",
+    "cursor",
+    "paseo",
+    "paseo-plugin",
+    "usage-tracking"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/luongndcoder/paseo.git",
+    "directory": "plugins"
+  },
   "type": "module",
   "scripts": {
     "typecheck": "tsgo -p tsconfig.json --noEmit",

@@ -1,1 +1,12 @@
-{ "id": "copilot-usage-source", "requirements": { "paseo": ">=0.9.2" } }
+{
+  "id": "copilot-usage-source",
+  "name": "GitHub Copilot Usage Source",
+  "description": "Track GitHub Copilot CLI quota, premium request counts, and account tiers in real time.",
+  "tags": ["copilot", "github-copilot", "usage", "quota", "github", "metrics"],
+  "keywords": ["copilot", "github", "usage-tracking", "developer-tools"],
+  "categories": ["usage-sources", "monitoring", "developer-tools"],
+  "repository": "https://github.com/luongndcoder/paseo",
+  "requirements": {
+    "paseo": ">=0.9.2"
+  }
+}

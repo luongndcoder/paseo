@@ -146,19 +146,19 @@ sequenceDiagram
 
 The `plugins/` directory contains 11 production-ready built-in plugins:
 
-| Plugin Directory               | Type             | Purpose & Description                              | Entry Point       | Prerequisites             |
-| :----------------------------- | :--------------- | :------------------------------------------------- | :---------------- | :------------------------ |
-| **`antigravity-provider`**     | Provider         | Bridges Paseo with the Antigravity CLI (`agy`)     | `index.server.ts` | `agy` CLI on PATH         |
-| **`muse-provider`**            | Provider & Usage | Integrates Muse Code CLI and tracks resource usage | `index.server.ts` | Muse CLI                  |
-| **`claude-usage-source`**      | Usage Source     | Tracks Claude Code 5-hour and weekly token limits  | `index.server.ts` | `~/.claude.json`          |
-| **`codex-usage-source`**       | Usage Source     | Monitors OpenAI Codex quota, tokens, and credits   | `index.server.ts` | Codex config              |
-| **`copilot-usage-source`**     | Usage Source     | Tracks GitHub Copilot CLI quota and plan status    | `index.server.ts` | GitHub CLI / Copilot auth |
-| **`cursor-usage-source`**      | Usage Source     | Monitors Cursor request counts and fast requests   | `index.server.ts` | Cursor credentials        |
-| **`grok-usage-source`**        | Usage Source     | Tracks xAI Grok usage and rate limits              | `index.server.ts` | Grok auth token           |
-| **`kimi-usage-source`**        | Usage Source     | Tracks Moonshot Kimi token limits and requests     | `index.server.ts` | Kimi config               |
-| **`minimax-usage-source`**     | Usage Source     | Monitors MiniMax API quota and balance             | `index.server.ts` | MiniMax API key           |
-| **`opencode-go-usage-source`** | Usage Source     | Monitors OpenCode Go token limits                  | `index.server.ts` | OpenCode config           |
-| **`zai-usage-source`**         | Usage Source     | Tracks Zai / GLM model limits and metrics          | `index.server.ts` | Zai credentials           |
+| Plugin Directory               | Type             | Purpose & Description                              | Discovery Tags                                   | Entry Point       |
+| :----------------------------- | :--------------- | :------------------------------------------------- | :----------------------------------------------- | :---------------- |
+| **`antigravity-provider`**     | Provider         | Bridges Paseo with Google Antigravity CLI (`agy`)  | `antigravity`, `agy`, `ai-agents`, `provider`    | `index.server.ts` |
+| **`muse-provider`**            | Provider & Usage | Integrates Muse Code CLI and tracks resource usage | `muse`, `muse-code`, `coding-assistant`          | `index.server.ts` |
+| **`claude-usage-source`**      | Usage Source     | Tracks Claude Code 5-hour and weekly token limits  | `claude`, `anthropic`, `tokens`, `cost-tracking` | `index.server.ts` |
+| **`codex-usage-source`**       | Usage Source     | Monitors OpenAI Codex quota, tokens, and credits   | `codex`, `openai`, `quota`, `token-metrics`      | `index.server.ts` |
+| **`copilot-usage-source`**     | Usage Source     | Tracks GitHub Copilot CLI quota and plan status    | `copilot`, `github`, `quota`, `metrics`          | `index.server.ts` |
+| **`cursor-usage-source`**      | Usage Source     | Monitors Cursor request counts and fast requests   | `cursor`, `cursor-ai`, `fast-requests`, `quota`  | `index.server.ts` |
+| **`grok-usage-source`**        | Usage Source     | Tracks xAI Grok usage and rate limits              | `grok`, `xai`, `tokens`, `rate-limits`           | `index.server.ts` |
+| **`kimi-usage-source`**        | Usage Source     | Tracks Moonshot Kimi token limits and requests     | `kimi`, `moonshot`, `tokens`, `limits`           | `index.server.ts` |
+| **`minimax-usage-source`**     | Usage Source     | Monitors MiniMax API quota and balance             | `minimax`, `api-quota`, `balance`                | `index.server.ts` |
+| **`opencode-go-usage-source`** | Usage Source     | Monitors OpenCode Go token limits                  | `opencode`, `pi`, `developer-tokens`             | `index.server.ts` |
+| **`zai-usage-source`**         | Usage Source     | Tracks Zai / GLM model limits and metrics          | `zai`, `zhipu`, `glm`, `tokens`                  | `index.server.ts` |
 
 ---
 

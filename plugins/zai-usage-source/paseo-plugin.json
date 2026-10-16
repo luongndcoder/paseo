@@ -1,1 +1,12 @@
-{ "id": "zai-usage-source", "requirements": { "paseo": ">=0.9.2" } }
+{
+  "id": "zai-usage-source",
+  "name": "Zhipu ZAI Usage Source",
+  "description": "Real-time token and quota tracker for Zhipu AI / GLM models.",
+  "tags": ["zai", "zhipu", "glm", "usage", "quota", "tokens", "monitoring"],
+  "keywords": ["zhipu-ai", "glm", "quota-tracker"],
+  "categories": ["usage-sources", "monitoring", "developer-tools"],
+  "repository": "https://github.com/luongndcoder/paseo",
+  "requirements": {
+    "paseo": ">=0.9.2"
+  }
+}

@@ -1,1 +1,12 @@
-{ "id": "kimi-usage-source", "requirements": { "paseo": ">=0.9.2" } }
+{
+  "id": "kimi-usage-source",
+  "name": "Kimi Usage Source",
+  "description": "Monitor Moonshot Kimi token limits and context usage in real time.",
+  "tags": ["kimi", "moonshot", "usage", "quota", "tokens", "monitoring"],
+  "keywords": ["kimi", "moonshot-ai", "token-tracking"],
+  "categories": ["usage-sources", "monitoring", "developer-tools"],
+  "repository": "https://github.com/luongndcoder/paseo",
+  "requirements": {
+    "paseo": ">=0.9.2"
+  }
+}

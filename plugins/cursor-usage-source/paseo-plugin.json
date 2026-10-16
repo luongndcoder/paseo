@@ -1,1 +1,12 @@
-{ "id": "cursor-usage-source", "requirements": { "paseo": ">=0.9.2" } }
+{
+  "id": "cursor-usage-source",
+  "name": "Cursor Usage Source",
+  "description": "Monitor fast requests, premium models usage, and billing period status for Cursor accounts.",
+  "tags": ["cursor", "cursor-ai", "usage", "fast-requests", "quota", "monitoring"],
+  "keywords": ["cursor", "billing", "usage", "quota"],
+  "categories": ["usage-sources", "monitoring", "developer-tools"],
+  "repository": "https://github.com/luongndcoder/paseo",
+  "requirements": {
+    "paseo": ">=0.9.2"
+  }
+}
