@@ -22,6 +22,7 @@ export const ACP_PROVIDER_ICON_NAMES = [
   "crow-cli",
   "cursor",
   "deepagents",
+  "deepseek-harness",
   "dimcode",
   "dirac",
   "factory-droid",
