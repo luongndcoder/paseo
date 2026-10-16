@@ -188,6 +188,7 @@ import { ProviderCatalogSession } from "./session/provider/provider-catalog-sess
 import { UsageSession } from "./session/usage/usage-session.js";
 import { WorkspaceFilesSession } from "./session/files/workspace-files-session.js";
 import { AgentConfigSession } from "./session/agent-config/agent-config-session.js";
+import { WorkspaceLabelSession } from "./session/workspace-labels/workspace-label-session.js";
 import { ProjectConfigSession } from "./session/project-config/project-config-session.js";
 import { DaemonSession, type DaemonRuntimeConfig } from "./session/daemon/daemon-session.js";
 import type { DaemonWebSocketRuntimeDiagnosticSnapshot } from "./session/daemon/diagnostics.js";
@@ -770,7 +771,7 @@ export class Session {
     string,
     WorkspaceUpdatesSubscriptionState
   >();
-  private readonly workspaceLabelService: WorkspaceLabelService | null;
+  private readonly workspaceLabelSession: WorkspaceLabelSession;
   private readonly eventSubscriptions = new Map<
     string,
     { owner: OwnedSubscription; events: Set<SessionEventSubscription>; notifications: boolean }
@@ -904,7 +905,16 @@ export class Session {
     this.projectRegistry = projectRegistry;
     this.workspaceRegistry = workspaceRegistry;
     this.directorySync = resolveDirectorySync(directorySync);
-    this.workspaceLabelService = resolveWorkspaceLabelService(workspaceLabelService);
+    this.workspaceLabelSession = new WorkspaceLabelSession({
+      host: {
+        emit: (msg) => this.emit(msg),
+        delivery: this.delivery,
+        createUnavailableError: () =>
+          new SessionRequestError("workspace_labels_unavailable", "Workspace labels unavailable"),
+        errorCode: workspaceLabelErrorCode,
+      },
+      service: resolveWorkspaceLabelService(workspaceLabelService),
+    });
     this.filesystem = filesystem ?? nodeSessionFileSystem;
     this.github = github ?? createGitHubService();
     this.renameCurrentBranch = renameCurrentBranch ?? renameCurrentBranchDefault;
@@ -2988,15 +2998,15 @@ export class Session {
   private dispatchWorkspaceLabelMessage(msg: SessionInboundMessage): Promise<void> | undefined {
     switch (msg.type) {
       case "workspace.label.list.request":
-        return this.handleWorkspaceLabelList(msg);
+        return this.workspaceLabelSession.handleList(msg);
       case "workspace.label.assignment.set.request":
-        return this.handleWorkspaceLabelAssignment(msg);
+        return this.workspaceLabelSession.handleAssignment(msg);
       case "workspace.label.update.request":
-        return this.handleWorkspaceLabelUpdate(msg);
+        return this.workspaceLabelSession.handleUpdate(msg);
       case "workspace.label.delete.request":
-        return this.handleWorkspaceLabelDelete(msg);
+        return this.workspaceLabelSession.handleDelete(msg);
       case "workspace.label.delete.inspect.request":
-        return this.handleWorkspaceLabelDeleteInspection(msg);
+        return this.workspaceLabelSession.handleDeleteInspection(msg);
       default:
         return undefined;
     }
@@ -6483,144 +6493,6 @@ export class Session {
           code: "project_list_failed",
         },
       });
-    }
-  }
-
-  private requireWorkspaceLabels(): WorkspaceLabelService {
-    if (!this.workspaceLabelService) {
-      throw new SessionRequestError("workspace_labels_unavailable", "Workspace labels unavailable");
-    }
-    return this.workspaceLabelService;
-  }
-
-  private emitWorkspaceLabelError(
-    request: { requestId: string; type: string },
-    error: unknown,
-  ): void {
-    this.emit({
-      type: "rpc_error",
-      payload: {
-        requestId: request.requestId,
-        requestType: request.type,
-        code: workspaceLabelErrorCode(error),
-        error: error instanceof Error ? error.message : "Workspace label operation failed",
-      },
-    });
-  }
-
-  private async handleWorkspaceLabelList(
-    request: Extract<SessionInboundMessage, { type: "workspace.label.list.request" }>,
-  ): Promise<void> {
-    const service = this.requireWorkspaceLabels();
-    if (!request.subscribe) {
-      this.emit({
-        type: "workspace.label.list.response",
-        payload: { requestId: request.requestId, ...(await service.list(request.sync)) },
-      });
-      return;
-    }
-    let bootstrap: ReturnType<typeof service.subscribe> | undefined;
-    const owner = this.delivery.begin("labels", request.subscribe.subscriptionId, async () => {
-      await bootstrap?.then(
-        (subscription) => subscription.unsubscribe(),
-        () => undefined,
-      );
-    });
-    try {
-      type LiveChange = Parameters<Parameters<typeof service.subscribe>[0]["onChange"]>[0];
-      const pending = new Map<string, LiveChange>();
-      let ready = false;
-      const emitChange = (change: LiveChange): void => {
-        owner.emit({
-          type: "workspace.label.update",
-          payload: change,
-        });
-      };
-      bootstrap = service.subscribe({
-        cursor: request.sync,
-        onChange: (change) => {
-          if (owner.signal.aborted) return;
-          if (!ready)
-            pending.set(change.kind === "upsert" ? change.label.name : change.name, change);
-          else emitChange(change);
-        },
-      });
-      const subscription = await bootstrap;
-      if (owner.signal.aborted) return;
-      this.emit({
-        type: "workspace.label.list.response",
-        payload: {
-          requestId: request.requestId,
-          subscriptionId: owner.responseId,
-          ...subscription.snapshot,
-        },
-      });
-      ready = true;
-      for (const change of pending.values()) {
-        if (change.seq > subscription.snapshot.sync.headSeq) emitChange(change);
-      }
-      pending.clear();
-    } catch (error) {
-      await owner.release();
-      this.emitWorkspaceLabelError(request, error);
-    }
-  }
-
-  private async handleWorkspaceLabelAssignment(
-    request: Extract<SessionInboundMessage, { type: "workspace.label.assignment.set.request" }>,
-  ): Promise<void> {
-    try {
-      const result = await this.requireWorkspaceLabels().setAssignment(request);
-      this.emit({
-        type: "workspace.label.assignment.set.response",
-        payload: { requestId: request.requestId, ...result },
-      });
-    } catch (error) {
-      this.emitWorkspaceLabelError(request, error);
-    }
-  }
-
-  private async handleWorkspaceLabelUpdate(
-    request: Extract<SessionInboundMessage, { type: "workspace.label.update.request" }>,
-  ): Promise<void> {
-    try {
-      const result = await this.requireWorkspaceLabels().update(request);
-      this.emit({
-        type: "workspace.label.update.response",
-        payload: { requestId: request.requestId, ...result },
-      });
-    } catch (error) {
-      this.emitWorkspaceLabelError(request, error);
-    }
-  }
-
-  private async handleWorkspaceLabelDelete(
-    request: Extract<SessionInboundMessage, { type: "workspace.label.delete.request" }>,
-  ): Promise<void> {
-    try {
-      const result = await this.requireWorkspaceLabels().delete(request.name);
-      this.emit({
-        type: "workspace.label.delete.response",
-        payload: { requestId: request.requestId, ...result },
-      });
-    } catch (error) {
-      this.emitWorkspaceLabelError(request, error);
-    }
-  }
-
-  private async handleWorkspaceLabelDeleteInspection(
-    request: Extract<SessionInboundMessage, { type: "workspace.label.delete.inspect.request" }>,
-  ): Promise<void> {
-    try {
-      const affectedWorkspaceCount = await this.requireWorkspaceLabels().countAffectedWorkspaces(
-        request.name,
-      );
-      this.emit({
-        type: "workspace.label.delete.inspect.response",
-        payload: { requestId: request.requestId, affectedWorkspaceCount },
-      });
-    } catch (error) {
-      this.emitWorkspaceLabelError(request, error);
     }
   }
 
