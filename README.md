@@ -56,7 +56,150 @@ Paseo is an open source agentic development environment for desktop, mobile, web
 
 [Run parallel tasks in Paseo](https://paseo.sh/docs/parallel-development): start agents in separate worktrees, review their diffs, run each app, and check it in the built-in browser.
 
+## Kiến trúc hệ thống (System Architecture)
+
+### 1. Sơ đồ tổng quát kiến trúc Paseo (Architecture Overview)
+
+Sơ đồ dưới đây mô tả cách các ứng dụng client (Desktop, Web, Mobile, CLI) kết nối tới Paseo Daemon thông qua giao thức WebSocket RPC bảo mật, từ đó tương tác với hệ thống Voice Tiếng Việt offline, PyCharm Git Engine, hệ thống Plugin mở rộng và các Tác tử AI (SLP, Claude, Codex, Antigravity):
+
+```mermaid
+flowchart TD
+    subgraph Clients["Tầng giao diện người dùng (Clients Layer)"]
+        Desktop["Desktop App (Electron / macOS / Windows / Linux)"]
+        Web["Web Client (React / Vite)"]
+        Mobile["Mobile App (iOS / Android Expo Native)"]
+        CLI["CLI Tool (@getpaseo/cli)"]
+    end
+
+    subgraph ProtocolLayer["Tầng giao thức & bảo mật (Protocol & Security Layer)"]
+        WSRPC["WebSocket RPC Protocol (@getpaseo/protocol)"]
+        Relay["Encrypted Relay / E2EE Pairing (@getpaseo/relay)"]
+    end
+
+    subgraph CoreDaemon["Paseo Core Daemon (@getpaseo/server)"]
+        SessionMgr["Session Manager & Worktree Engine"]
+
+        subgraph VoiceEngine["Bộ nhận diện giọng nói (Vietnamese Voice Engine)"]
+            VAD["Silero VAD / Audio Chunking"]
+            SherpaONNX["Sherpa-ONNX Vietnamese STT (Offline)"]
+            TTS["Text-to-Speech & Realtime Streaming"]
+        end
+
+        subgraph GitEngine["PyCharm Git Engine (Cmd + 9)"]
+            GitGraph["Swimlane Commit Graph & Stashes"]
+            SplitDiff["Side-by-Side Split Diff & Hunk Staging"]
+            MergeResolver["3-Way Conflict Resolver Engine"]
+        end
+
+        subgraph PluginHost["Plugin Runtime Host"]
+            PluginRegistry["Plugin Discovery & Loader"]
+            ProviderHost["Provider Adapter Host"]
+            UsageHost["Usage Sources Aggregator"]
+        end
+
+        PlantUML["PlantUML Server / Local Render Engine"]
+    end
+
+    subgraph AgentEcosystem["Hệ sinh thái Tác tử (Agents & Providers)"]
+        subgraph Providers["Providers & Local CLIs"]
+            Claude["Claude Code CLI"]
+            Codex["OpenAI Codex CLI"]
+            Antigravity["Antigravity CLI (agy)"]
+            Copilot["GitHub Copilot CLI"]
+            OpenCode["OpenCode / Pi CLI"]
+            Muse["Muse Code CLI"]
+        end
+
+        subgraph SLP["SLP Orchestration (Supervisor / Lead / Peers)"]
+            Supervisor["SLP Supervisor"]
+            Lead["SLP Lead Planner"]
+            Peers["SLP Peer Builders & Testers"]
+            Verify["slp-verify & Deterministic Evidence"]
+        end
+    end
+
+    Clients <--> ProtocolLayer
+    ProtocolLayer <--> CoreDaemon
+    CoreDaemon <--> AgentEcosystem
+    PluginHost <--> Providers
+    SessionMgr <--> SLP
+```
+
+---
+
+### 2. Sơ đồ chi tiết luồng xử lý giọng nói tiếng Việt & Agent (Vietnamese Voice & Session Flow)
+
+Sơ đồ trình tự biểu diễn quá trình từ khi người dùng nói tiếng Việt offline qua microphone, nhận diện từ tức thời (realtime transcript streaming), đưa vào prompt composer, kích hoạt Agent trong worktree độc lập và xem kết quả:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Người dùng (User)
+    participant Client as Paseo Client (Desktop / Web / Mobile)
+    participant Daemon as Paseo Daemon (@getpaseo/server)
+    participant Sherpa as Sherpa-ONNX Engine (Local STT)
+    participant Session as Agent Session Manager
+    participant Provider as Coding Agent (Claude / Codex / Antigravity)
+
+    User->>Client: Bấm nút Micro hoặc nhấn phím tắt (Voice Mode)
+    Client->>Client: Thu âm luồng PCM 16kHz qua Audio Worklet
+    Client->>Daemon: Truyền Stream Audio Chunks qua WebSocket
+    Daemon->>Sherpa: Phân tích Silero VAD & Giải mã tiếng Việt offline
+    Sherpa-->>Daemon: Partial text ("hãy tạo route mới...")
+    Daemon-->>Client: Broadcast text realtime lên Prompt Composer
+    Client-->>User: Hiển thị chữ động ngay trên khung chat
+
+    User->>Client: Dừng nói / Nhấn Gửi (Send)
+    Sherpa-->>Daemon: Final transcript câu lệnh tiếng Việt
+    Client->>Daemon: Gửi prompt đã chuẩn hoá tới Session
+    Daemon->>Session: Khởi tạo / Gán Worktree cách ly (Isolated Git Worktree)
+    Session->>Provider: Kích hoạt Agent CLI với bối cảnh dự án
+    Provider-->>Daemon: Stream stdout, thinking process & file changes
+    Daemon-->>Client: Hiển thị streaming response, diffs & log thời gian thực
+    User->>Client: Mở PyCharm Git Tool Window (Cmd + 9) để review diff / merge
+```
+
+---
+
+### 3. Sơ đồ chi tiết quy trình PyCharm Git Tool Window & 3-Way Merge Conflict Resolver
+
+Quy trình quản lý mã nguồn trực quan theo chuẩn JetBrains PyCharm tích hợp trực tiếp trong Paseo:
+
+```mermaid
+flowchart LR
+    subgraph WorkingTree["Trạng thái Git Workspace"]
+        A["Local Changes (Uncommitted)"]
+        B["Merge / Rebase Conflict Markers"]
+        C["Git Stash Stack (stash@{0})"]
+    end
+
+    subgraph PyCharmWindow["PyCharm Git Tool Window (Cmd + 9)"]
+        Graph["Swimlane Commit Graph<br/>(Branch Tree, Tags, Authors)"]
+        Split["Side-by-Side Split Diff<br/>(+ Stage Hunk / ↺ Rollback Hunk)"]
+        Conflict["3-Way Conflict Resolver<br/>(Yours | Result | Theirs)"]
+    end
+
+    subgraph Actions["Thao tác trực quan 1-Click"]
+        Act1["Cherry-pick / Revert / Reword"]
+        Act2["Stage / Rollback từng Hunk"]
+        Act3["Accept Yours / Accept Theirs / Accept Both"]
+        Act4["Save & Mark Resolved (git add)"]
+    end
+
+    A --> Split
+    B --> Conflict
+    C --> Graph
+
+    Split --> Act2
+    Conflict --> Act3 --> Act4
+    Graph --> Act1
+```
+
+---
+
 ## Plugins
+
+> 💡 **Xem tài liệu chi tiết và sơ đồ kiến trúc Plugin tại: [plugins/README.md](plugins/README.md)**
 
 Plugins run on the daemon and show up in every client you connect, with the same UI on desktop, web,
 iOS, and Android. Write a plugin once and it is on your phone.
