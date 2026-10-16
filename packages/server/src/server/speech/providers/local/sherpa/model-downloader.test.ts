@@ -1,4 +1,11 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+
+const { ensureVietnameseMock } = vi.hoisted(() => ({ ensureVietnameseMock: vi.fn() }));
+vi.mock("./vietnamese-model.js", async (importActual) => ({
+  ...(await importActual<typeof import("./vietnamese-model.js")>()),
+  ensureVietnameseSherpaModel: ensureVietnameseMock,
+}));
+
 import {
   mkdtempSync,
   mkdirSync,
@@ -16,6 +23,7 @@ import pino from "pino";
 
 import { ensureSherpaOnnxModel, getSherpaOnnxModelDir } from "./model-downloader.js";
 import { getSherpaOnnxModelSpec } from "./model-catalog.js";
+import { NEMOTRON_MODEL_ID } from "./vietnamese-model.js";
 
 function makeTmpDir(): string {
   return mkdtempSync(path.join(tmpdir(), "paseo-speech-models-"));
@@ -109,5 +117,21 @@ describe("sherpa model downloader", () => {
     });
 
     expect(out).toBe(modelDir);
+  });
+
+  test("forwards the abort signal to the Nemotron download", async () => {
+    ensureVietnameseMock.mockResolvedValue({ modelDir: "/tmp/nemotron" });
+    const controller = new AbortController();
+    await ensureSherpaOnnxModel({
+      modelsDir: "/tmp/models",
+      modelId: NEMOTRON_MODEL_ID,
+      logger,
+      signal: controller.signal,
+    });
+    expect(ensureVietnameseMock).toHaveBeenCalledWith(
+      "/tmp/models",
+      expect.anything(),
+      controller.signal,
+    );
   });
 });
