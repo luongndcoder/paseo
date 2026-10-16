@@ -16,6 +16,7 @@ import {
   buildEdgeSpawnSpec,
   isRustEdgeRequested,
   resolveEdgeBinary,
+  scrubEdgeEnv,
 } from "../src/server/edge-backend.js";
 import { runSupervisor } from "./supervisor.js";
 import { resolveSupervisorLogFile } from "./supervisor-log-config.js";
@@ -142,6 +143,8 @@ async function main(): Promise<void> {
   const workerEntry = config.devMode ? resolveDevWorkerEntry() : resolveWorkerEntry();
   const workerExecArgv = resolveWorkerExecArgv(workerEntry, config.devMode);
   const workerEnv: NodeJS.ProcessEnv = { ...process.env };
+  // Stale edge secrets must not flip a flag-off worker into edge-backend mode.
+  scrubEdgeEnv(workerEnv);
   const packagedNodeEntrypointRunner =
     process.env.ELECTRON_RUN_AS_NODE === "1"
       ? resolvePackagedNodeEntrypointRunnerPath(fileURLToPath(import.meta.url))

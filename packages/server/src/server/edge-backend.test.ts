@@ -12,6 +12,7 @@ import {
   parseEdgeRemoteAddress,
   publicOriginsFor,
   readEdgeBackendConfig,
+  scrubEdgeEnv,
   resolveEdgeBackendConfigPatch,
   resolveEdgeBinary,
   resolveEdgeConnectionIdentity,
@@ -110,6 +111,8 @@ describe("buildEdgeSpawnSpec", () => {
     expect(spec.env.PASEO_HOME).toBe("/h");
     expect(spec.env.PASEO_EDGE_TOKEN).toBeUndefined();
     expect(spec.env.PASEO_EDGE_PUBLIC_LISTEN).toBeUndefined();
+    // paseod watches the supervisor's stdin pipe for liveness.
+    expect(spec.env.PASEO_EDGE_PARENT_STDIN).toBe("1");
   });
 });
 
@@ -155,18 +158,30 @@ describe("readEdgeBackendConfig", () => {
   });
 });
 
+describe("scrubEdgeEnv", () => {
+  test("removes the token, public listen and backend command", () => {
+    const env: NodeJS.ProcessEnv = {
+      PASEO_EDGE_TOKEN: "t",
+      PASEO_EDGE_PUBLIC_LISTEN: "0.0.0.0:6767",
+      PASEO_EDGE_BACKEND_CMD: "[]",
+      PASEO_LISTEN: "127.0.0.1:1",
+    };
+    scrubEdgeEnv(env);
+    expect(env).toEqual({ PASEO_LISTEN: "127.0.0.1:1" });
+  });
+});
+
 describe("resolveEdgeBackendConfigPatch", () => {
   const edge = { token: "t", publicListen: "127.0.0.1:6767" };
 
-  test("pins relay off and keeps the internal loopback listen", () => {
+  test("keeps the internal loopback listen and leaves relay config alone", () => {
     const patch = resolveEdgeBackendConfigPatch({
       env: { PASEO_LISTEN: "127.0.0.1:41000" },
       edge,
       corsAllowedOrigins: ["https://app.example"],
     });
     expect(patch.listen).toBe("127.0.0.1:41000");
-    expect(patch.relayEnabled).toBe(false);
-    expect(patch.relayEnabledMutable).toBe(false);
+    expect(patch).not.toHaveProperty("relayEnabled");
     expect(patch.edgeBackend).toBe(edge);
   });
 

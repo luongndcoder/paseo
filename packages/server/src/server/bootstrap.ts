@@ -241,7 +241,12 @@ import { DaemonExecutions } from "./hub/daemon-executions.js";
 import { PluginService } from "./plugins/index.js";
 import { BuiltinPluginLoader } from "./plugins/builtin/index.js";
 import { ManagedPluginSources } from "./plugins/managed-source.js";
-import { publicOriginsFor, type EdgeBackendConfig } from "./edge-backend.js";
+import {
+  EDGE_HOST_CLASS_PATH,
+  publicOriginsFor,
+  resolveEdgeConnectionIdentity,
+  type EdgeBackendConfig,
+} from "./edge-backend.js";
 
 const MCP_DEBUG_BATCH_LIMIT = 10;
 const MCP_DEBUG_SECRET = "[redacted]";
@@ -302,11 +307,30 @@ function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
   return remoteAddress !== undefined && LOOPBACK_REMOTE_ADDRESSES.has(remoteAddress);
 }
 
+function createEdgeHostClassHandler(
+  serviceProxy: ServiceProxySubsystem,
+  edgeBackend: EdgeBackendConfig | undefined,
+): express.RequestHandler {
+  return (req, res) => {
+    if (!resolveEdgeConnectionIdentity(req.headers, edgeBackend ?? null)) {
+      res.status(404).end();
+      return;
+    }
+    const host = typeof req.query.host === "string" ? req.query.host : undefined;
+    res.json({ service: serviceProxy.isRegisteredServiceHost(host) });
+  };
+}
+
 export function createTerminalActivityRouteHandler(
   terminalManager: TerminalManager,
+  edgeBackend?: EdgeBackendConfig,
 ): express.RequestHandler {
   return async (req, res) => {
-    if (!isLoopbackRemoteAddress(req.socket.remoteAddress)) {
+    // Behind the edge the socket peer is always the edge on loopback; judge the
+    // client address the edge forwarded when the request carries its token.
+    const edgeIdentity = resolveEdgeConnectionIdentity(req.headers, edgeBackend ?? null);
+    const peerAddress = edgeIdentity ? edgeIdentity.remoteAddress : req.socket.remoteAddress;
+    if (!isLoopbackRemoteAddress(peerAddress)) {
       res.status(403).json({ error: "Forbidden" });
       return;
     }
@@ -570,7 +594,14 @@ function createReportedListen(input: {
 }
 
 function resolveExpressTrustProxySetting(config: PaseoDaemonConfig): true | string[] {
-  return config.trustedProxies ?? ["loopback"];
+  const trusted = config.trustedProxies ?? ["loopback"];
+  // Behind the edge the socket peer is the edge on loopback. The edge keeps or drops the
+  // client's forwarding chain by the same trustedProxies list, so Express must trust the edge
+  // hop itself to resolve the real client from the chain the edge forwards.
+  if (config.edgeBackend && trusted !== true && !trusted.includes("loopback")) {
+    return [...trusted, "loopback"];
+  }
+  return trusted;
 }
 
 function createInitialSpeechConfig(config: PaseoDaemonConfig): MutableDaemonConfig["speech"] {
@@ -786,6 +817,7 @@ export async function createPaseoDaemon(
   const serviceProxy = createServiceProxySubsystem({
     logger,
     publicBaseUrl: serviceProxyPublicBaseUrl,
+    edgeBackend: config.edgeBackend,
   });
   const scriptRuntimeStore = new WorkspaceScriptRuntimeStore();
   const workspaceSetupRuntime = new WorkspaceSetupRuntime();
@@ -822,6 +854,10 @@ export async function createPaseoDaemon(
     },
     logger,
   });
+
+  // The edge asks whether a Host is a registered script service before it terminates `/ws`
+  // itself: those hosts serve their own `/ws`, which TS tunnels raw by Host.
+  app.get(EDGE_HOST_CLASS_PATH, createEdgeHostClassHandler(serviceProxy, config.edgeBackend));
 
   // Service proxy classifies service hosts before daemon auth/route fallthrough.
   // Registered service hosts proxy directly; known service namespaces without a
@@ -882,7 +918,7 @@ export async function createPaseoDaemon(
   app.post(
     "/api/terminal-activity",
     express.json(),
-    createTerminalActivityRouteHandler(terminalManager),
+    createTerminalActivityRouteHandler(terminalManager, config.edgeBackend),
   );
 
   // Serve the bundled browser web UI when enabled. Mounted after service-proxy
@@ -1846,8 +1882,10 @@ export async function createPaseoDaemon(
                   return appBaseUrl;
                 },
                 desktopManaged: config.desktopManaged === true,
+                // Behind the edge the worker never runs a relay transport, but pairing and
+                // status must report the relay the edge runs from the same config.
                 getRelayConfig: () =>
-                  relayRuntime?.getConfig() ?? {
+                  (config.edgeBackend ? undefined : relayRuntime?.getConfig()) ?? {
                     enabled: daemonConfigStore.get().relay?.enabled ?? relayEnabled,
                     endpoint: relayEndpoint,
                     publicEndpoint: relayPublicEndpoint,
@@ -1869,7 +1907,8 @@ export async function createPaseoDaemon(
             wsServer.beginAcceptingConnections();
             relayRuntime = createRelayRuntime({
               config: {
-                enabled: relayEnabled,
+                // The edge owns relay; the worker never opens its own relay sockets.
+                enabled: config.edgeBackend ? false : relayEnabled,
                 endpoint: relayEndpoint,
                 publicEndpoint: relayPublicEndpoint,
                 useTls: relayUseTls,

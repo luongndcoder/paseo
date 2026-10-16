@@ -10,6 +10,7 @@ import {
   formatEdgeLifecycleLine,
   readEdgeBackendConfig,
   resolveEdgeBackendConfigPatch,
+  scrubEdgeEnv,
   watchEdgeParent,
   type EdgeBackendConfig,
 } from "./edge-backend.js";
@@ -88,7 +89,8 @@ function bootstrapFromEnvironment(): BootstrapResult {
 }
 
 // Behind the Rust edge the worker binds only the internal loopback port and the edge owns
-// relay, so the relay flag is pinned off even if persisted config or the CLI enables it.
+// relay (bootstrap never starts the worker's relay transport in edge mode). The relay config
+// stays as resolved so pairing and status report the relay the edge actually runs.
 function applyEdgeBackendOverrides(
   config: ReturnType<typeof loadConfig>,
   edge: EdgeBackendConfig,
@@ -99,12 +101,6 @@ function applyEdgeBackendOverrides(
     corsAllowedOrigins: config.corsAllowedOrigins,
   });
   Object.assign(config, patch);
-  const configReload = config.configReload;
-  if (!configReload) throw new Error("Loaded daemon config is missing reload metadata");
-  (configReload.cli ??= {}).relayEnabled = false;
-  if (!configReload.overrideControlledPaths.includes("daemon.relay.enabled")) {
-    configReload.overrideControlledPaths.push("daemon.relay.enabled");
-  }
 }
 
 function applyCliFlagOverrides(config: ReturnType<typeof loadConfig>): void {
@@ -164,7 +160,8 @@ async function main() {
   applyCliFlagOverrides(config);
   const edgeBackend = readEdgeBackendConfig(process.env);
   if (edgeBackend) {
-    // After the CLI flags: `--relay` must not re-enable the worker's own relay.
+    // Read once, then drop: the token must not reach agents, terminals or nested daemons.
+    scrubEdgeEnv(process.env);
     applyEdgeBackendOverrides(config, edgeBackend);
   }
 

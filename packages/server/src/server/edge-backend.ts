@@ -16,6 +16,11 @@ export const ENV_EDGE_BIN = "PASEO_EDGE_BIN";
 export const ENV_EDGE_BACKEND_CMD = "PASEO_EDGE_BACKEND_CMD";
 export const ENV_EDGE_TOKEN = "PASEO_EDGE_TOKEN";
 export const ENV_EDGE_PUBLIC_LISTEN = "PASEO_EDGE_PUBLIC_LISTEN";
+/** Set by the supervisor on paseod: it holds paseod's stdin pipe, EOF means the supervisor died. */
+export const ENV_EDGE_PARENT_STDIN = "PASEO_EDGE_PARENT_STDIN";
+
+/** Route the edge asks whether a Host is a registered script service (token required). */
+export const EDGE_HOST_CLASS_PATH = "/__paseo_edge/host-class";
 
 export const HEADER_EDGE_TOKEN = "x-paseo-edge-token";
 export const HEADER_EDGE_TRANSPORT = "x-paseo-edge-transport";
@@ -108,6 +113,7 @@ export function buildEdgeSpawnSpec(input: BuildEdgeSpawnSpecInput): EdgeSpawnSpe
   delete env[ENV_EDGE_TOKEN];
   delete env[ENV_EDGE_PUBLIC_LISTEN];
   env[ENV_EDGE_BACKEND_CMD] = JSON.stringify([input.worker.command, ...input.worker.args]);
+  env[ENV_EDGE_PARENT_STDIN] = "1";
   return { command: input.binary, args: [], env };
 }
 
@@ -169,6 +175,18 @@ export function readEdgeBackendConfig(env: NodeJS.ProcessEnv): EdgeBackendConfig
   return { token, publicListen: publicListen ? publicListen : null };
 }
 
+/**
+ * Removes edge secrets from an environment that will be handed to other processes.
+ * The worker calls this on `process.env` right after reading the config, so agents,
+ * terminals and nested daemons never inherit the token or flip into backend mode.
+ */
+export function scrubEdgeEnv(env: NodeJS.ProcessEnv): void {
+  delete env[ENV_EDGE_TOKEN];
+  delete env[ENV_EDGE_PUBLIC_LISTEN];
+  delete env[ENV_EDGE_BACKEND_CMD];
+  delete env[ENV_EDGE_PARENT_STDIN];
+}
+
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
 
 function splitHostPort(listen: string): { host: string; port: number } | null {
@@ -188,8 +206,6 @@ function splitHostPort(listen: string): { host: string; port: number } | null {
 export interface EdgeBackendDaemonConfigPatch {
   listen: string;
   corsAllowedOrigins: string[];
-  relayEnabled: false;
-  relayEnabledMutable: false;
   edgeBackend: EdgeBackendConfig;
 }
 
@@ -225,8 +241,6 @@ export function resolveEdgeBackendConfigPatch(input: {
     corsAllowedOrigins: [
       ...new Set([...input.corsAllowedOrigins, ...publicOriginsFor(input.edge.publicListen)]),
     ],
-    relayEnabled: false,
-    relayEnabledMutable: false,
     edgeBackend: input.edge,
   };
 }
