@@ -100,6 +100,32 @@ describe("jsonl codec", () => {
     expect((JSON.parse(line) as { data: string }).data).toBe("a\uFFFD b \uFFFD \u{1F600}");
   });
 
+  it("decodes lines without $b64 as plain JSON", () => {
+    const line = '{"a":[1,{"b":"x"}],"c":null}';
+    expect(decodeWorkerLine(line)).toEqual(JSON.parse(line));
+  });
+
+  it("decodes a deeply nested {$b64} object", () => {
+    const decoded = decodeWorkerLine('{"a":[{"b":{"c":[{"$b64":"aGk="}]}}]}') as {
+      a: { b: { c: Buffer[] } }[];
+    };
+    expect(Buffer.isBuffer(decoded.a[0].b.c[0])).toBe(true);
+    expect(decoded.a[0].b.c[0].toString()).toBe("hi");
+  });
+
+  it("does not decode strings that merely contain the text $b64", () => {
+    const line = '{"s":"{\\"$b64\\":\\"aGk=\\"}","t":"\\"$b64\\"","k":{"x":"$b64"}}';
+    const decoded = decodeWorkerLine(line) as { s: unknown; t: unknown; k: unknown };
+    expect(typeof decoded.s).toBe("string");
+    expect(decoded.s).toBe('{"$b64":"aGk="}');
+    expect(decoded.t).toBe('"$b64"');
+    expect(decoded.k).toEqual({ x: "$b64" });
+  });
+
+  it("does not decode a non-string $b64 value", () => {
+    expect(decodeWorkerLine('{"$b64":5}')).toEqual({ $b64: 5 });
+  });
+
   it("leaves objects with other keys alone", () => {
     expect(decodeWorkerLine('{"$b64":"aGk=","x":1}')).toEqual({ $b64: "aGk=", x: 1 });
   });

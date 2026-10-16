@@ -61,17 +61,24 @@ export function encodeWorkerLine(message: unknown): string {
   )}\n`;
 }
 
-export function decodeWorkerLine(line: string): unknown {
-  return JSON.parse(line, (_key, value: unknown) => {
-    if (value && typeof value === "object" && !Array.isArray(value)) {
-      const keys = Object.keys(value);
-      const b64 = (value as { $b64?: unknown }).$b64;
-      if (keys.length === 1 && typeof b64 === "string") {
-        return Buffer.from(b64, "base64");
-      }
+// Revivers cost ~6x a plain parse on large snapshot lines, so only pay for them when a
+// {"$b64":...} object can be present at all.
+function reviveB64(_key: string, value: unknown): unknown {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const keys = Object.keys(value);
+    const b64 = (value as { $b64?: unknown }).$b64;
+    if (keys.length === 1 && typeof b64 === "string") {
+      return Buffer.from(b64, "base64");
     }
-    return value;
-  });
+  }
+  return value;
+}
+
+export function decodeWorkerLine(line: string): unknown {
+  if (!line.includes('"$b64"')) {
+    return JSON.parse(line);
+  }
+  return JSON.parse(line, reviveB64);
 }
 
 function findServerPackageRoot(): string {
