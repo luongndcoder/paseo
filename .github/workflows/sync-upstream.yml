@@ -1,0 +1,90 @@
+name: Sync Upstream Paseo
+
+on:
+  schedule:
+    # 02:00 UTC daily = 09:00 AM Vietnam Time (GMT+7)
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (do not push to main)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    name: Sync from official Paseo (upstream/main)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git author
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add and fetch upstream
+        run: |
+          git remote add upstream https://github.com/getpaseo/paseo.git || true
+          git fetch upstream main --tags
+
+      - name: Check for upstream updates
+        id: check_updates
+        run: |
+          BEHIND_COUNT=$(git rev-list --count HEAD..upstream/main)
+          echo "behind_count=${BEHIND_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "Commits behind upstream/main: ${BEHIND_COUNT}"
+
+      - name: Merge upstream into main
+        if: steps.check_updates.outputs.behind_count != '0'
+        id: merge_upstream
+        run: |
+          echo "Attempting to merge upstream/main into main..."
+          if git merge upstream/main -m "chore(upstream): merge official paseo main ($(date +'%Y-%m-%d'))" --no-edit; then
+            echo "has_conflicts=false" >> "$GITHUB_OUTPUT"
+            echo "Successfully merged upstream without conflicts."
+          else
+            echo "has_conflicts=true" >> "$GITHUB_OUTPUT"
+            echo "Merge conflicts detected. Aborting main merge and opening a conflict resolution PR..."
+            git merge --abort
+          fi
+
+      - name: Push merged main
+        if: steps.check_updates.outputs.behind_count != '0' && steps.merge_upstream.outputs.has_conflicts == 'false' && !inputs.dry_run
+        run: |
+          git push origin main
+          echo "Successfully pushed updated main to origin."
+
+      - name: Handle conflicts via sync branch and Pull Request
+        if: steps.check_updates.outputs.behind_count != '0' && steps.merge_upstream.outputs.has_conflicts == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SYNC_BRANCH="sync/upstream-$(date +'%Y%m%d-%H%M%S')"
+          echo "Creating conflict review branch: ${SYNC_BRANCH}"
+          git checkout -b "${SYNC_BRANCH}"
+
+          # Attempt merge again on the isolated branch; allow conflicts to be staged or marked
+          git merge upstream/main -m "chore(upstream): merge official paseo main with conflicts" || true
+
+          # Commit conflicts state if any unmerged files exist
+          git add -A
+          git commit -m "chore(upstream): sync branch containing conflict markers for manual review" || true
+
+          git push origin "${SYNC_BRANCH}"
+
+          echo "Creating Pull Request for manual conflict resolution..."
+          gh pr create \
+            --title "chore(upstream): resolve merge conflicts with official paseo ($(date +'%Y-%m-%d'))" \
+            --body "Tự động phát hiện thay đổi mới từ \`getpaseo/paseo:main\` nhưng có xung đột với code tùy biến.\n\nVui lòng kiểm tra và giải quyết conflict trên nhánh \`${SYNC_BRANCH}\` trước khi merge vào \`main\`." \
+            --base main \
+            --head "${SYNC_BRANCH}"
