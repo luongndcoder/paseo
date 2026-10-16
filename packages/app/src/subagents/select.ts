@@ -71,6 +71,7 @@ export function selectSubagentsForParent(
   state: SessionStoreSnapshot,
   params: SelectSubagentsParams,
   pendingArchiveIds: ReadonlySet<string>,
+  includeArchived = false,
 ): SubagentRow[] {
   const agents = state.sessions[params.serverId]?.agents;
   if (!agents || agents.size === 0) {
@@ -81,14 +82,14 @@ export function selectSubagentsForParent(
     return EMPTY_SUBAGENT_ROWS;
   }
   const parentAgent = agents.get(params.parentAgentId);
-  if (parentAgent?.archivedAt) {
+  if (!includeArchived && parentAgent?.archivedAt) {
     return EMPTY_SUBAGENT_ROWS;
   }
 
   const rows: SubagentRow[] = [];
   for (const agent of agents.values()) {
     if (
-      agent.archivedAt ||
+      (!includeArchived && agent.archivedAt) ||
       pendingArchiveIds.has(agent.id) ||
       agent.parentAgentId !== params.parentAgentId
     ) {
@@ -110,13 +111,15 @@ export function selectProviderSubagentsForParent(
   params: SelectSubagentsParams,
   supported: boolean,
   nestingSupported = false,
+  includeHidden = false,
 ): ProviderSubagentRow[] {
   if (!supported) return EMPTY_PROVIDER_SUBAGENT_ROWS;
   if (params.providerParentSubagentId && !nestingSupported) return EMPTY_PROVIDER_SUBAGENT_ROWS;
   const rows: ProviderSubagentRow[] = [];
   const prefix = `${params.serverId}\0${params.parentAgentId}\0`;
   for (const [key, subagent] of state.descriptors) {
-    if (!key.startsWith(prefix) || state.hiddenFromTrack.has(key)) continue;
+    if (!key.startsWith(prefix)) continue;
+    if (!includeHidden && state.hiddenFromTrack.has(key)) continue;
     if (
       nestingSupported &&
       (subagent.parentSubagentId ?? null) !== (params.providerParentSubagentId ?? null)

@@ -24,6 +24,7 @@ import {
   findPaneById,
   useWorkspaceLayoutStore,
 } from "@/stores/workspace-layout-store";
+import { isFinishedSubagent } from "@/subagents/archive-finished";
 import { isWorkspaceRootAgent } from "@/subagents/policies";
 import { refreshProviderSubagents, useProviderSubagentStore } from "@/subagents/provider-store";
 import {
@@ -428,6 +429,7 @@ export function useWorkspaceAgentSidebarSummary(
             state,
             { serverId, parentAgentId },
             pendingArchiveIds,
+            true,
           );
           for (const row of rows) {
             if (!seenIds.has(row.id)) {
@@ -438,14 +440,9 @@ export function useWorkspaceAgentSidebarSummary(
         }
         // Also include any non-root agent in this workspace whose parent might live elsewhere
         const rootIdSet = new Set(rootAgentIds);
-        const sessionAgents = state.sessions[serverId]?.agents;
         for (const agent of rawWorkspaceAgents) {
-          if (agent.archivedAt || pendingArchiveIds.has(agent.id)) continue;
-          if (agent.parentAgentId) {
-            const parentAgent = sessionAgents?.get(agent.parentAgentId);
-            if (parentAgent?.archivedAt || pendingArchiveIds.has(agent.parentAgentId)) {
-              continue;
-            }
+          if (agent.parentAgentId && pendingArchiveIds.has(agent.parentAgentId)) {
+            continue;
           }
           if (!rootIdSet.has(agent.id) && !seenIds.has(agent.id)) {
             seenIds.add(agent.id);
@@ -482,6 +479,7 @@ export function useWorkspaceAgentSidebarSummary(
             { serverId, parentAgentId },
             supported,
             nestingSupported,
+            true,
           );
           collected.push(...rows);
         }
@@ -905,6 +903,15 @@ export const WorkspaceAgentMetaRow = memo(function WorkspaceAgentMetaRow({
   );
 });
 
+const ARCHIVED_SUBAGENTS_LIMIT = 5;
+
+function isRowActive(row: SubagentRow): boolean {
+  if (row.requiresAttention) {
+    return true;
+  }
+  return !isFinishedSubagent(row);
+}
+
 /**
  * Renders the collapsible, indented Subagent Tree directly underneath a workspace row
  * in the Left Sidebar ("By Status", "Pinned", and "By Project" views).
@@ -930,6 +937,24 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
   const hasActiveSubagent = summary.runningSubagentCount > 0 || summary.needsInputSubagentCount > 0;
   const isCollapsed = explicitCollapsed ?? !hasActiveSubagent;
   const getProviderIcon = useProviderIcons(workspace.serverId);
+  const [showAllArchived, setShowAllArchived] = useState(false);
+  const [isToggleHovered, setIsToggleHovered] = useState(false);
+
+  const handleShowAllArchived = useCallback(() => {
+    setShowAllArchived(true);
+  }, []);
+
+  const handleHideOlderArchived = useCallback(() => {
+    setShowAllArchived(false);
+  }, []);
+
+  const handleToggleMouseEnter = useCallback(() => {
+    setIsToggleHovered(true);
+  }, []);
+
+  const handleToggleMouseLeave = useCallback(() => {
+    setIsToggleHovered(false);
+  }, []);
 
   // Determine which subagent tab is currently focused in this workspace (if any)
   const activeTargetKey = useWorkspaceLayoutStore(
@@ -955,6 +980,53 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
     ),
   );
 
+  const { visibleSubagents, hiddenArchivedCount, totalArchivedCount } = useMemo(() => {
+    const active: SubagentRow[] = [];
+    const archived: SubagentRow[] = [];
+
+    for (const row of summary.subagents) {
+      if (isRowActive(row)) {
+        active.push(row);
+      } else {
+        archived.push(row);
+      }
+    }
+
+    if (archived.length <= ARCHIVED_SUBAGENTS_LIMIT || showAllArchived) {
+      const all = [...archived, ...active];
+      all.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+      return {
+        visibleSubagents: all,
+        hiddenArchivedCount: 0,
+        totalArchivedCount: archived.length,
+      };
+    }
+
+    // Take the 5 newest archived (at the end of chronologically sorted list)
+    const newestArchived = archived.slice(-ARCHIVED_SUBAGENTS_LIMIT);
+    const hiddenCount = archived.length - ARCHIVED_SUBAGENTS_LIMIT;
+
+    // Keep active selected row visible even if it's an older archived row
+    if (activeTargetKey) {
+      const selectedArchived = archived.slice(0, -ARCHIVED_SUBAGENTS_LIMIT).find((r) => {
+        const key = r.kind === "paseo" ? `paseo:${r.id}` : `provider:${r.parentAgentId}:${r.id}`;
+        return key === activeTargetKey;
+      });
+      if (selectedArchived && !newestArchived.some((r) => r.id === selectedArchived.id)) {
+        newestArchived.unshift(selectedArchived);
+      }
+    }
+
+    const visible = [...newestArchived, ...active];
+    visible.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+
+    return {
+      visibleSubagents: visible,
+      hiddenArchivedCount: hiddenCount,
+      totalArchivedCount: archived.length,
+    };
+  }, [activeTargetKey, showAllArchived, summary.subagents]);
+
   if (workspace.archivingAt !== null || summary.subagents.length === 0 || isCollapsed) {
     return null;
   }
@@ -970,7 +1042,39 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
         onMouseDown: (e: { stopPropagation?: () => void }) => e.stopPropagation?.(),
       } as object)}
     >
-      {summary.subagents.map((row) => {
+      {hiddenArchivedCount > 0 ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Show ${hiddenArchivedCount} older archived subagents`}
+          onPress={handleShowAllArchived}
+          style={[styles.treeToggleMoreRow, isToggleHovered && styles.treeToggleMoreRowHovered]}
+          {...({
+            onMouseEnter: handleToggleMouseEnter,
+            onMouseLeave: handleToggleMouseLeave,
+          } as object)}
+        >
+          <ChevronRight size={10} color="#94a3b8" />
+          <Text style={styles.treeToggleMoreText}>+{hiddenArchivedCount} older archived</Text>
+        </Pressable>
+      ) : null}
+      {hiddenArchivedCount === 0 &&
+      showAllArchived &&
+      totalArchivedCount > ARCHIVED_SUBAGENTS_LIMIT ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Show fewer archived subagents"
+          onPress={handleHideOlderArchived}
+          style={[styles.treeToggleMoreRow, isToggleHovered && styles.treeToggleMoreRowHovered]}
+          {...({
+            onMouseEnter: handleToggleMouseEnter,
+            onMouseLeave: handleToggleMouseLeave,
+          } as object)}
+        >
+          <ChevronDown size={10} color="#94a3b8" />
+          <Text style={styles.treeToggleMoreText}>Show less</Text>
+        </Pressable>
+      ) : null}
+      {visibleSubagents.map((row) => {
         const rowTargetKey =
           row.kind === "paseo" ? `paseo:${row.id}` : `provider:${row.parentAgentId}:${row.id}`;
         return (
@@ -1290,6 +1394,25 @@ const styles = StyleSheet.create((theme) => ({
   },
   treeContainerStatusGroup: {
     marginLeft: 16,
+  },
+  treeToggleMoreRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: 2,
+    paddingHorizontal: 4,
+    borderRadius: 4,
+    marginLeft: 4,
+    marginVertical: 1,
+  },
+  treeToggleMoreRowHovered: {
+    backgroundColor: theme.colors.surface1,
+  },
+  treeToggleMoreText: {
+    fontSize: 9.5,
+    lineHeight: 13,
+    fontFamily: theme.fontFamily.ui,
+    color: theme.colors.foregroundMuted,
   },
   treeItemRow: {
     flexDirection: "row",
