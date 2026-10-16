@@ -12,6 +12,11 @@ import { resolvePaseoHome } from "../src/server/paseo-home.js";
 import { daemonLogPath } from "../src/server/daemon-instance.js";
 import { PRIVATE_FILE_MODE } from "../src/server/private-files.js";
 import { loadPersistedConfig } from "../src/server/persisted-config.js";
+import {
+  buildEdgeSpawnSpec,
+  isRustEdgeRequested,
+  resolveEdgeBinary,
+} from "../src/server/edge-backend.js";
 import { runSupervisor } from "./supervisor.js";
 import { resolveSupervisorLogFile } from "./supervisor-log-config.js";
 
@@ -97,8 +102,43 @@ function resolvePackagedNodeEntrypointRunnerPath(currentScriptPath: string): str
   return existsSync(runnerPath) ? runnerPath : null;
 }
 
+interface EdgeSpawnInput {
+  workerEntry: string;
+  workerExecArgv: string[];
+  workerArgs: string[];
+  workerEnv: NodeJS.ProcessEnv;
+  nodeWorkerSpawnSpec:
+    | ((workerEntry: string) => { command: string; args: string[]; env: NodeJS.ProcessEnv })
+    | undefined;
+}
+
+function resolveEdgeSpawnSpec(input: EdgeSpawnInput) {
+  const binary = resolveEdgeBinary({
+    env: input.workerEnv,
+    platform: process.platform,
+    arch: process.arch,
+    // Source layout (scripts/) and built layout (dist/scripts/) differ by one level.
+    binRoots: [
+      fileURLToPath(new URL("../dist/bin", import.meta.url)),
+      fileURLToPath(new URL("../bin", import.meta.url)),
+    ],
+  });
+  const packaged = input.nodeWorkerSpawnSpec?.(input.workerEntry);
+  const worker = packaged ?? {
+    command: process.execPath,
+    args: [...input.workerExecArgv, input.workerEntry, ...input.workerArgs],
+    env: input.workerEnv,
+  };
+  return buildEdgeSpawnSpec({
+    binary,
+    worker: { command: worker.command, args: worker.args },
+    env: worker.env,
+  });
+}
+
 async function main(): Promise<void> {
   const config = parseConfig(process.argv.slice(2));
+  const rustEdgeRequested = isRustEdgeRequested(process.env);
   const workerEntry = config.devMode ? resolveDevWorkerEntry() : resolveWorkerEntry();
   const workerExecArgv = resolveWorkerExecArgv(workerEntry, config.devMode);
   const workerEnv: NodeJS.ProcessEnv = { ...process.env };
@@ -106,6 +146,35 @@ async function main(): Promise<void> {
     process.env.ELECTRON_RUN_AS_NODE === "1"
       ? resolvePackagedNodeEntrypointRunnerPath(fileURLToPath(import.meta.url))
       : null;
+
+  const nodeWorkerSpawnSpec = packagedNodeEntrypointRunner
+    ? (resolvedWorkerEntry: string) => ({
+        command: process.execPath,
+        args: [
+          packagedNodeEntrypointRunner,
+          "node-script",
+          resolvedWorkerEntry,
+          ...config.workerArgs,
+        ],
+        env: {
+          ...workerEnv,
+          ELECTRON_RUN_AS_NODE: "1",
+        },
+      })
+    : undefined;
+
+  // Resolved before the PID lock so a missing binary leaves no stale lock.
+  // PASEO_EDGE=rust: paseod owns the public port and launches the worker itself, so the
+  // supervisor spawns paseod. A missing binary is a startup error, never a silent fallback.
+  const edgeSpawnSpec = rustEdgeRequested
+    ? resolveEdgeSpawnSpec({
+        workerEntry,
+        workerExecArgv,
+        workerArgs: config.workerArgs,
+        workerEnv,
+        nodeWorkerSpawnSpec,
+      })
+    : null;
 
   const paseoHome = resolvePaseoHome(workerEnv);
   const persistedConfig = loadPersistedConfig(paseoHome);
@@ -147,26 +216,16 @@ async function main(): Promise<void> {
 
   const supervisor = runSupervisor({
     name: "DaemonRunner",
-    startupMessage: "Starting daemon worker (IPC restart and crash restart enabled)",
+    startupMessage: edgeSpawnSpec
+      ? "Starting daemon worker behind the Rust edge (PASEO_EDGE=rust)"
+      : "Starting daemon worker (IPC restart and crash restart enabled)",
     resolveWorkerEntry: () => workerEntry,
     workerArgs: config.workerArgs,
     workerEnv,
     workerExecArgv,
-    resolveWorkerSpawnSpec: packagedNodeEntrypointRunner
-      ? (resolvedWorkerEntry) => ({
-          command: process.execPath,
-          args: [
-            packagedNodeEntrypointRunner,
-            "node-script",
-            resolvedWorkerEntry,
-            ...config.workerArgs,
-          ],
-          env: {
-            ...workerEnv,
-            ELECTRON_RUN_AS_NODE: "1",
-          },
-        })
-      : undefined,
+    resolveWorkerSpawnSpec: edgeSpawnSpec
+      ? () => ({ ...edgeSpawnSpec, transport: "jsonl" })
+      : nodeWorkerSpawnSpec,
     restartOnCrash: true,
     logFile: supervisorLogFile,
     onWorkerReady: async ({ listen, serverId }) => {

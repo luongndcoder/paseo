@@ -6,6 +6,13 @@ import { resolvePaseoHome } from "./paseo-home.js";
 import { createRootLogger } from "./logger.js";
 import type { DaemonLifecycleIntent } from "./bootstrap.js";
 import { getProcessDiagnostics } from "./process-diagnostics.js";
+import {
+  formatEdgeLifecycleLine,
+  readEdgeBackendConfig,
+  resolveEdgeBackendConfigPatch,
+  watchEdgeParent,
+  type EdgeBackendConfig,
+} from "./edge-backend.js";
 
 process.title = "Paseo Daemon";
 
@@ -80,6 +87,26 @@ function bootstrapFromEnvironment(): BootstrapResult {
   }
 }
 
+// Behind the Rust edge the worker binds only the internal loopback port and the edge owns
+// relay, so the relay flag is pinned off even if persisted config or the CLI enables it.
+function applyEdgeBackendOverrides(
+  config: ReturnType<typeof loadConfig>,
+  edge: EdgeBackendConfig,
+): void {
+  const patch = resolveEdgeBackendConfigPatch({
+    env: process.env,
+    edge,
+    corsAllowedOrigins: config.corsAllowedOrigins,
+  });
+  Object.assign(config, patch);
+  const configReload = config.configReload;
+  if (!configReload) throw new Error("Loaded daemon config is missing reload metadata");
+  (configReload.cli ??= {}).relayEnabled = false;
+  if (!configReload.overrideControlledPaths.includes("daemon.relay.enabled")) {
+    configReload.overrideControlledPaths.push("daemon.relay.enabled");
+  }
+}
+
 function applyCliFlagOverrides(config: ReturnType<typeof loadConfig>): void {
   const configReload = config.configReload;
   if (!configReload) throw new Error("Loaded daemon config is missing reload metadata");
@@ -135,6 +162,11 @@ async function main() {
   let exitHookInstalled = false;
 
   applyCliFlagOverrides(config);
+  const edgeBackend = readEdgeBackendConfig(process.env);
+  if (edgeBackend) {
+    // After the CLI flags: `--relay` must not re-enable the worker's own relay.
+    applyEdgeBackendOverrides(config, edgeBackend);
+  }
 
   const installExitHook = () => {
     if (exitHookInstalled || !shutdownPromise) {
@@ -196,6 +228,11 @@ async function main() {
   };
 
   const sendSupervisorLifecycleMessage = (message: SupervisorLifecycleMessage): boolean => {
+    if (edgeBackend) {
+      // No Node IPC behind the edge: lifecycle events are JSONL on stdout.
+      process.stdout.write(formatEdgeLifecycleLine(message));
+      return true;
+    }
     if (typeof process.send !== "function") {
       return false;
     }
@@ -306,7 +343,25 @@ async function main() {
     timer.unref();
   };
 
-  installSupervisorLivenessGuard();
+  const installEdgeLivenessGuard = () => {
+    watchEdgeParent({
+      stdin: process.stdin,
+      onParentLost: () => {
+        writeWorkerLifecycleLog(paseoHome, "Edge liveness lost; worker exiting", {
+          ...getProcessDiagnostics(),
+        });
+        // Same hard boundary as supervisor loss: the edge owned our output pipes.
+        process.exit(0);
+      },
+      onGracefulShutdown: (reason) => beginShutdown("Edge shutdown request", { reason }),
+    });
+  };
+
+  if (edgeBackend) {
+    installEdgeLivenessGuard();
+  } else {
+    installSupervisorLivenessGuard();
+  }
 
   try {
     daemon = await createPaseoDaemon(

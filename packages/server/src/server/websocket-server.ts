@@ -3,7 +3,7 @@ import type { CreationSnapshot } from "@getpaseo/protocol/messages";
 import { CreationService } from "./creation/index.js";
 import { MessageReceipts } from "./message-receipts/index.js";
 import { WebSocket, WebSocketServer } from "ws";
-import type { IncomingMessage, Server as HTTPServer } from "http";
+import type { IncomingHttpHeaders, IncomingMessage, Server as HTTPServer } from "http";
 import { join } from "path";
 import { getHostName } from "./host-name.js";
 import { randomUUID } from "node:crypto";
@@ -114,7 +114,14 @@ import {
   sendBoundedPhysicalFrameAndWait,
 } from "./websocket/physical-socket.js";
 
+import {
+  resolveEdgeConnectionIdentity,
+  type EdgeBackendConfig,
+  type EdgeConnectionIdentity,
+} from "./edge-backend.js";
+
 const WS_CLOSE_DAEMON_AUTH_FAILED = 4401;
+const WS_CLOSE_POLICY_VIOLATION = 1008;
 
 export interface ExternalSocketMetadata {
   transport: "relay" | "hub";
@@ -157,6 +164,8 @@ interface WebSocketServerConfig {
   allowedOrigins?: Set<string>;
   hostnames?: HostnamesConfig;
   getAllowedOrigins?: () => Set<string>;
+  /** Present when the Rust edge fronts this daemon. */
+  edgeBackend?: EdgeBackendConfig;
   getHostnames?: () => HostnamesConfig | undefined;
   daemonStatusRpc?: boolean;
   relayConfig?: boolean;
@@ -592,6 +601,7 @@ export class VoiceAssistantWebSocketServer {
   private connectionLifecycle: "starting" | "accepting" | "stopping" = "accepting";
   private readonly advertiseDaemonStatusRpc: boolean;
   private readonly advertiseRelayConfig: boolean;
+  private edgeBackend: EdgeBackendConfig | null = null;
   private readonly directorySync = new DirectorySyncService();
   private readonly pluginRuntime: SessionOptions["pluginRuntime"];
   private readonly orchestrationSkills: SessionOptions["orchestrationSkills"];
@@ -820,6 +830,7 @@ export class VoiceAssistantWebSocketServer {
     auth: DaemonAuthConfig | undefined,
   ): WebSocketServer {
     const password = auth?.password;
+    this.edgeBackend = wsConfig.edgeBackend ?? null;
     const wss = new WebSocketServer({
       server,
       path: "/ws",
@@ -891,7 +902,7 @@ export class VoiceAssistantWebSocketServer {
       return;
     }
 
-    const requestMetadata = extractSocketRequestMetadata(req);
+    const requestMetadata = extractSocketRequestMetadata(req, this.edgeBackend);
     const origin = requestMetadata.origin;
     const requestHost = requestMetadata.host ?? null;
     if (requestHost && !isHostnameAllowed(requestHost, hostnames)) {
@@ -923,13 +934,18 @@ export class VoiceAssistantWebSocketServer {
     // pending hello handler so an eager client cannot lose its first message.
     ws.pause();
     try {
+      const edgeIdentity = resolveEdgeConnectionIdentity(request.headers, this.edgeBackend);
+      if (edgeIdentity?.transport === "relay") {
+        await this.attachEdgeRelaySocket(ws, edgeIdentity);
+        return;
+      }
       // COMPAT(headerAuth): added in v0.9.1, remove after 2027-03-24.
       const protocol = extractWsBearerProtocol(request.headers["sec-websocket-protocol"]);
       const token =
         extractHttpBearerToken(request.headers.authorization) ?? extractWsBearerToken(protocol);
       const hasHeaderCredential = token !== null;
       if (password && hasHeaderCredential) {
-        const requestMetadata = extractSocketRequestMetadata(request);
+        const requestMetadata = extractSocketRequestMetadata(request, this.edgeBackend);
         const isAuthorized = await isBearerTokenValidAsync({ password, token });
         if (!isAuthorized) {
           const reason = "Incorrect password";
@@ -952,6 +968,23 @@ export class VoiceAssistantWebSocketServer {
     } finally {
       ws.resume();
     }
+  }
+
+  // The edge terminates relay E2EE and dials us per relay client. Route it like
+  // relay-transport does so admission rules and session keys stay identical.
+  private async attachEdgeRelaySocket(
+    ws: WebSocket,
+    identity: EdgeConnectionIdentity,
+  ): Promise<void> {
+    if (!identity.relayConnectionId) {
+      ws.close(WS_CLOSE_POLICY_VIOLATION, "Missing relay connection id");
+      return;
+    }
+    await this.attachExternalSocket(ws, {
+      transport: "relay",
+      externalSessionKey: `session:${identity.relayConnectionId}`,
+      relayConnectionId: identity.relayConnectionId,
+    });
   }
 
   public broadcast(message: WSOutboundMessage): void {
@@ -1324,7 +1357,7 @@ export class VoiceAssistantWebSocketServer {
       return;
     }
 
-    const requestMetadata = extractSocketRequestMetadata(request);
+    const requestMetadata = extractSocketRequestMetadata(request, this.edgeBackend);
     const identity = createWebSocketConnectionIdentity(requestMetadata, metadata);
     this.socketIdentities.set(ws, identity);
     const connectionLogger = this.logger.child(toConnectionLogFields(identity));
@@ -2827,7 +2860,10 @@ function isLoopbackAddress(address: string): boolean {
   return ipv4.startsWith("127.");
 }
 
-function extractSocketRequestMetadata(request: unknown): SocketRequestMetadata {
+function extractSocketRequestMetadata(
+  request: unknown,
+  edge: EdgeBackendConfig | null = null,
+): SocketRequestMetadata {
   if (!request || typeof request !== "object") {
     return {};
   }
@@ -2848,8 +2884,15 @@ function extractSocketRequestMetadata(request: unknown): SocketRequestMetadata {
   const origin = typeof record.headers?.origin === "string" ? record.headers.origin : undefined;
   const userAgent =
     typeof record.headers?.["user-agent"] === "string" ? record.headers["user-agent"] : undefined;
+  // Behind the edge the socket peer is always the edge on loopback; the real client
+  // address is trusted only when the request carries the internal token.
+  const forwarded = resolveEdgeConnectionIdentity(
+    (record as { headers?: IncomingHttpHeaders }).headers ?? {},
+    edge,
+  );
   const remoteAddress =
-    typeof record.socket?.remoteAddress === "string" ? record.socket.remoteAddress : undefined;
+    forwarded?.remoteAddress ??
+    (typeof record.socket?.remoteAddress === "string" ? record.socket.remoteAddress : undefined);
 
   return {
     ...(host ? { host } : {}),
