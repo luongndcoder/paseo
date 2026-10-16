@@ -130,19 +130,45 @@ const WORKSPACE_SESSION_METHODS = new Set([
   "archiveWorkspaceRecord",
 ]);
 
+// Agent-lifecycle methods moved onto AgentLifecycleSession, forwarded the same way.
+const AGENT_LIFECYCLE_SESSION_METHODS = new Set([
+  "handleArchiveAgentRequest",
+  "handleUpdateAgentRequest",
+  "archiveAgentForClose",
+  "listFetchAgentsEntries",
+  "resolveAgentIdentifier",
+  "getAgentPayloadById",
+]);
+
+function forwardedOwner(
+  obj: Record<string, unknown>,
+  key: string | symbol,
+): Record<string, unknown> | null {
+  if (typeof key !== "string") return null;
+  if (WORKSPACE_SESSION_METHODS.has(key) && obj.workspaceSession) {
+    return obj.workspaceSession as Record<string, unknown>;
+  }
+  if (AGENT_LIFECYCLE_SESSION_METHODS.has(key) && obj.agentLifecycleSession) {
+    return obj.agentLifecycleSession as Record<string, unknown>;
+  }
+  return null;
+}
+
 export function asSessionInternals<T>(session: unknown): T {
-  const target = session as { workspaceSession?: Record<string, unknown> };
+  const target = session as Record<string, unknown>;
   return new Proxy(target, {
     get(obj, key) {
-      if (typeof key === "string" && WORKSPACE_SESSION_METHODS.has(key) && obj.workspaceSession) {
-        const method = obj.workspaceSession[key] as (...args: unknown[]) => unknown;
-        return method.bind(obj.workspaceSession);
+      const owner = forwardedOwner(obj, key);
+      if (owner) {
+        const method = owner[key as string] as (...args: unknown[]) => unknown;
+        return method.bind(owner);
       }
       return Reflect.get(obj, key);
     },
     set(obj, key, value) {
-      if (typeof key === "string" && WORKSPACE_SESSION_METHODS.has(key) && obj.workspaceSession) {
-        obj.workspaceSession[key] = value;
+      const owner = forwardedOwner(obj, key);
+      if (owner) {
+        owner[key as string] = value;
         return true;
       }
       return Reflect.set(obj, key, value);

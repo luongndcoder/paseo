@@ -32,7 +32,6 @@ import {
   type WorkspaceScriptListRequest,
   type WorkspaceScriptStartRequest,
   type WorkspaceScriptStopRequest,
-  type CloseItemsRequest,
   type ProjectPlacementPayload,
   type WorkspaceSetupSnapshot,
   type WorkspaceDescriptorPayload,
@@ -41,19 +40,15 @@ import type { TerminalManager } from "../terminal/terminal-manager.js";
 import { TerminalSessionController } from "../terminal/terminal-session-controller.js";
 import type { TerminalActivity } from "@getpaseo/protocol/terminal-activity";
 import type { BinaryFrame } from "@getpaseo/protocol/binary-frames/index";
-import { CursorError } from "./pagination/cursor.js";
-import { SortablePager, type SortSpec } from "./pagination/sortable-pager.js";
-import { matchesAgentHistoryQuery } from "./agent-history-search.js";
 import type { SpeechToTextProvider, TextToSpeechProvider } from "./speech/speech-provider.js";
 import type { TurnDetectionProvider } from "./speech/turn-detection-provider.js";
 import { isStoredAgentProviderAvailable } from "./persistence-hooks.js";
 import { ensureAgentLoaded, ensureUnarchivedAgentLoaded } from "./agent/agent-loading.js";
-import { sendPromptToAgent, waitForAgentRunStartWithTimeout } from "./agent/agent-prompt.js";
+import { sendPromptToAgent } from "./agent/agent-prompt.js";
 import {
   resolveCreateAgentTitles,
   resolveFirstAgentPromptTitle,
 } from "./agent/create-agent-title.js";
-import { respondToAgentPermission } from "./agent/permission-response.js";
 import type { VoiceCallerContext, VoiceSpeakHandler } from "./voice-types.js";
 import type { ScriptHealthState } from "./script-health-monitor.js";
 import { spawnWorkspaceScript } from "./worktree-bootstrap.js";
@@ -69,8 +64,6 @@ import {
 import type { DaemonConfigStore } from "./daemon-config-store.js";
 import { loadPersistedConfig } from "./persisted-config.js";
 import { getErrorMessage, getErrorMessageOr } from "@getpaseo/protocol/error-utils";
-import { getAgentStatusPriority } from "@getpaseo/protocol/agent-state-bucket";
-import { getParentAgentIdFromLabels } from "@getpaseo/protocol/agent-labels";
 import type { WorkspaceGitService } from "./workspace-git-service.js";
 import type { ProjectUpdate } from "./workspace-reconciliation-service.js";
 import {
@@ -101,13 +94,7 @@ import type {
 } from "./agent/agent-manager.js";
 import { createAgentCommand } from "./agent/create-agent/create.js";
 import { resolveCreateAgentIntent, type CreateAgentIntent } from "./agent/create-agent/intent.js";
-import {
-  archiveAgentCommand,
-  closeAgentCommand,
-  detachAgentCommand,
-  setAgentModeCommand,
-  updateAgentCommand,
-} from "./agent/lifecycle-command.js";
+import { setAgentModeCommand } from "./agent/lifecycle-command.js";
 import { buildStoredAgentPayload, toAgentPayload } from "./agent/agent-projections.js";
 import {
   appendTimelineItemIfAgentKnown,
@@ -120,16 +107,11 @@ import { buildAgentPrompt } from "./agent/prompt-attachments.js";
 import type { StructuredGenerationDaemonConfig } from "./agent/structured-generation-providers.js";
 import {
   getAgentStreamEventTurnId,
-  type AgentPermissionResponse,
   type AgentRunOptions,
   type AgentSessionConfig,
 } from "./agent/agent-sdk-types.js";
 import type { StoredAgentRecord } from "./agent/agent-storage.js";
 import type { AgentStorage } from "./agent/agent-storage.js";
-import {
-  ImportSessionsRequestError,
-  listImportableProviderSessions,
-} from "./agent/import-sessions.js";
 import { checkoutFromPersistedWorkspacePlacement } from "./workspace-registry-model.js";
 import { resolveWorkspaceIdForPath } from "./resolve-workspace-id-for-path.js";
 import {
@@ -188,7 +170,6 @@ import {
 } from "./session/workspace-recovery/workspace-recovery-service.js";
 import {
   createAgentUpdatesService,
-  matchesAgentUpdatesFilter,
   type AgentUpdatesService,
 } from "./session/agent-updates/agent-updates-service.js";
 import { expandTilde } from "../utils/path.js";
@@ -263,28 +244,7 @@ function clientSupportsAllProviders(appVersion: string | null): boolean {
   return isAppVersionAtLeast(appVersion, MIN_VERSION_ALL_PROVIDERS);
 }
 
-type DeleteFencedAgentStorage = AgentStorage & {
-  beginDelete(agentId: string): void;
-};
-
-function beginAgentDeleteIfSupported(agentStorage: AgentStorage, agentId: string): void {
-  if ("beginDelete" in agentStorage && typeof agentStorage.beginDelete === "function") {
-    (agentStorage as DeleteFencedAgentStorage).beginDelete(agentId);
-  }
-}
-
-const FETCH_AGENTS_SORT_KEYS = ["status_priority", "created_at", "updated_at", "title"] as const;
-
-export function resolveWaitForFinishError(options: {
-  status: "permission" | "error" | "idle";
-  final: AgentSnapshotPayload | null;
-}): string | null {
-  if (options.status !== "error") {
-    return null;
-  }
-  const message = options.final?.lastError;
-  return typeof message === "string" && message.trim().length > 0 ? message : "Agent failed";
-}
+export { resolveWaitForFinishError } from "./session/agent-lifecycle/agent-lifecycle-session.js";
 
 export interface SessionRuntimeMetrics {
   terminalDirectorySubscriptionCount: number;
@@ -296,30 +256,6 @@ export interface SessionRuntimeMetrics {
   peakInflightRequests: number;
 }
 
-type FetchAgentsRequestMessage = Extract<SessionInboundMessage, { type: "fetch_agents_request" }>;
-type FetchAgentHistoryRequestMessage = Extract<
-  SessionInboundMessage,
-  { type: "fetch_agent_history_request" }
->;
-type AgentDirectoryRequestMessage = FetchAgentsRequestMessage | FetchAgentHistoryRequestMessage;
-
-/**
- * Only history carries a query. The active-agents directory filters on
- * structure and never ranks, so it always reads as no query at all.
- */
-function agentDirectorySearchQuery(request: AgentDirectoryRequestMessage): string {
-  if (request.type !== "fetch_agent_history_request") return "";
-  return request.search?.trim() ?? "";
-}
-type FetchAgentsRequestFilter = NonNullable<FetchAgentsRequestMessage["filter"]>;
-type FetchAgentsRequestSort = NonNullable<FetchAgentsRequestMessage["sort"]>[number];
-type FetchAgentsResponsePayload = Extract<
-  SessionOutboundMessage,
-  { type: "fetch_agents_response" }
->["payload"];
-type FetchAgentsResponseEntry = FetchAgentsResponsePayload["entries"][number];
-type FetchAgentsResponsePageInfo = FetchAgentsResponsePayload["pageInfo"];
-type AgentUpdatesFilter = FetchAgentsRequestFilter;
 type CreateAgentRequestMessage = Extract<SessionInboundMessage, { type: "create_agent_request" }>;
 
 interface ResolvedSessionCreateAgentIntent {
@@ -909,25 +845,6 @@ export class Session {
       runtime: pluginRuntime,
       logger: this.sessionLogger,
     });
-    this.agentLifecycleSession = new AgentLifecycleSession({
-      host: {
-        emit: (msg) => this.emit(msg),
-        forwardLiveAgent: (agent) => this.agentUpdates.forwardLiveAgent(agent),
-        buildAgentPayload: (agent) => this.buildAgentPayload(agent),
-        registerWorkspaceForImportedAgent: (workspace) =>
-          this.registerWorkspaceForImportedAgent(workspace),
-        restoreOwningWorkspaceForLegacyAgentRefresh: (agentId) =>
-          this.workspaceSession.restoreOwningWorkspaceForLegacyAgentRefresh(agentId),
-        interruptAgentIfRunning: (agentId) => this.interruptAgentIfRunning(agentId),
-        handleAgentRunError: (agentId, error, context) =>
-          this.handleAgentRunError(agentId, error, context),
-        listRegisteredProviderIds: () => this.providerSnapshotManager.listRegisteredProviderIds(),
-      },
-      agentManager,
-      agentStorage,
-      workspaceProvisioning: this.workspaceProvisioning,
-      logger: this.sessionLogger,
-    });
     this.agentConfigSession = new AgentConfigSession({
       host: {
         emit: (msg) => this.emit(msg),
@@ -1072,6 +989,47 @@ export class Session {
         ),
       logger: this.sessionLogger,
     });
+    this.agentLifecycleSession = new AgentLifecycleSession({
+      host: {
+        emit: (msg) => this.emit(msg),
+        forwardLiveAgent: (agent) => this.agentUpdates.forwardLiveAgent(agent),
+        buildAgentPayload: (agent) => this.buildAgentPayload(agent),
+        registerWorkspaceForImportedAgent: (workspace) =>
+          this.registerWorkspaceForImportedAgent(workspace),
+        restoreOwningWorkspaceForLegacyAgentRefresh: (agentId) =>
+          this.workspaceSession.restoreOwningWorkspaceForLegacyAgentRefresh(agentId),
+        interruptAgentIfRunning: (agentId) => this.interruptAgentIfRunning(agentId),
+        handleAgentRunError: (agentId, error, context) =>
+          this.handleAgentRunError(agentId, error, context),
+        listRegisteredProviderIds: () => this.providerSnapshotManager.listRegisteredProviderIds(),
+        isProviderVisibleToClient: (provider) => this.isProviderVisibleToClient(provider),
+        buildStoredAgentPayload: (record) => this.buildStoredAgentPayload(record),
+        buildProjectPlacementForWorkspaceId: (workspaceId) =>
+          this.buildProjectPlacementForWorkspaceId(workspaceId),
+        buildActiveProjectPlacementsByWorkspaceId: () =>
+          this.buildActiveProjectPlacementsByWorkspaceId(),
+        listAgentPayloads: (filter) => this.listAgentPayloads(filter),
+        refreshObservationProducers: () => this.refreshObservationProducers(),
+        emitWorkspaceUpdateForWorkspaceId: (workspaceId) =>
+          this.workspaceSession.emitWorkspaceUpdateForWorkspaceId(workspaceId),
+        emitWorkspaceUpdatesForWorkspaceIds: (workspaceIds) =>
+          this.workspaceSession.emitWorkspaceUpdatesForWorkspaceIds(workspaceIds),
+        killTerminalForClose: (terminalId) =>
+          this.terminalController.killTerminalForClose(terminalId),
+        createRequestedAgent: (request) => this.createRequestedAgent(request),
+        createSessionAgent: (msg) => this.createSessionAgent(msg),
+      },
+      agentManager,
+      agentStorage,
+      workspaceProvisioning: this.workspaceProvisioning,
+      providerSnapshotManager,
+      messageReceipts: this.messageReceipts,
+      delivery: this.delivery,
+      agentUpdates: this.agentUpdates,
+      agentDirectory: this.agentDirectory,
+      directorySync: this.directorySync,
+      logger: this.sessionLogger,
+    });
     this.createAgentLifecycleDispatch = new CreateAgentLifecycleDispatch({
       paseoHome: this.paseoHome,
       worktreesRoot: this.worktreesRoot,
@@ -1081,7 +1039,7 @@ export class Session {
       workspaceGitService: this.workspaceGitService,
       createPaseoWorktreeWorkflow: (input, workflowOptions) =>
         this.createPaseoWorktreeWorkflow(input, workflowOptions),
-      archiveAgentForClose: (agentId) => this.archiveAgentForClose(agentId),
+      archiveAgentForClose: (agentId) => this.agentLifecycleSession.archiveAgentForClose(agentId),
       findWorkspaceIdForCwd: (cwd) => this.findWorkspaceIdForCwd(cwd),
       listActiveWorkspaces: () => this.listActiveWorkspaceRefs(),
       archiveWorkspaceRecord: (workspaceId) =>
@@ -2466,7 +2424,7 @@ export class Session {
   private dispatchAgentRelationshipMessage(msg: SessionInboundMessage): Promise<void> | undefined {
     switch (msg.type) {
       case "agent.detach.request":
-        return this.handleDetachAgentRequest(msg.agentId, msg.requestId);
+        return this.agentLifecycleSession.handleDetachAgentRequest(msg.agentId, msg.requestId);
       default:
         return undefined;
     }
@@ -2566,21 +2524,26 @@ export class Session {
   private dispatchAgentLifecycleMessage(msg: SessionInboundMessage): Promise<void> | undefined {
     switch (msg.type) {
       case "fetch_agents_request":
-        return this.handleFetchAgents(msg);
+        return this.agentLifecycleSession.handleFetchAgents(msg);
       case "fetch_agent_history_request":
-        return this.handleFetchAgentHistory(msg);
+        return this.agentLifecycleSession.handleFetchAgentHistory(msg);
       case "fetch_recent_provider_sessions_request":
-        return this.handleFetchRecentProviderSessions(msg);
+        return this.agentLifecycleSession.handleFetchRecentProviderSessions(msg);
       case "fetch_agent_request":
-        return this.handleFetchAgent(msg.agentId, msg.requestId);
+        return this.agentLifecycleSession.handleFetchAgent(msg.agentId, msg.requestId);
       case "delete_agent_request":
-        return this.handleDeleteAgentRequest(msg.agentId, msg.requestId);
+        return this.agentLifecycleSession.handleDeleteAgentRequest(msg.agentId, msg.requestId);
       case "archive_agent_request":
-        return this.handleArchiveAgentRequest(msg.agentId, msg.requestId);
+        return this.agentLifecycleSession.handleArchiveAgentRequest(msg.agentId, msg.requestId);
       case "close_items_request":
-        return this.handleCloseItemsRequest(msg);
+        return this.agentLifecycleSession.handleCloseItemsRequest(msg);
       case "update_agent_request":
-        return this.handleUpdateAgentRequest(msg.agentId, msg.name, msg.labels, msg.requestId);
+        return this.agentLifecycleSession.handleUpdateAgentRequest(
+          msg.agentId,
+          msg.name,
+          msg.labels,
+          msg.requestId,
+        );
       case "project.rename.request":
         return this.workspaceSession.handleProjectRenameRequest(
           msg.projectId,
@@ -2590,11 +2553,15 @@ export class Session {
       case "project.icon.set.request":
         return this.workspaceSession.handleProjectIconSetRequest(msg);
       case "send_agent_message_request":
-        return this.handleSendAgentMessageRequest(msg);
+        return this.agentLifecycleSession.handleSendAgentMessageRequest(msg);
       case "wait_for_finish_request":
-        return this.handleWaitForFinish(msg.agentId, msg.requestId, msg.timeoutMs);
+        return this.agentLifecycleSession.handleWaitForFinish(
+          msg.agentId,
+          msg.requestId,
+          msg.timeoutMs,
+        );
       case "create_agent_request":
-        return this.handleCreateAgentRequest(msg);
+        return this.agentLifecycleSession.handleCreateAgentRequest(msg);
       case "resume_agent_request":
         return this.agentLifecycleSession.handleResumeAgentRequest(msg);
       case "import_agent_request":
@@ -2604,9 +2571,13 @@ export class Session {
       case "cancel_agent_request":
         return this.agentLifecycleSession.handleCancelAgentRequest(msg.agentId, msg.requestId);
       case "agent_permission_response":
-        return this.handleAgentPermissionResponse(msg.agentId, msg.requestId, msg.response);
+        return this.agentLifecycleSession.handleAgentPermissionResponse(
+          msg.agentId,
+          msg.requestId,
+          msg.response,
+        );
       case "clear_agent_attention":
-        return this.handleClearAgentAttention(msg.agentId, msg.requestId);
+        return this.agentLifecycleSession.handleClearAgentAttention(msg.agentId, msg.requestId);
       default:
         return undefined;
     }
@@ -3007,248 +2978,6 @@ export class Session {
       this.onLifecycleIntent(intent);
     } catch (error) {
       this.sessionLogger.error({ err: error, intent }, "Lifecycle intent handler failed");
-    }
-  }
-
-  private async handleDeleteAgentRequest(agentId: string, requestId: string): Promise<void> {
-    this.sessionLogger.info({ agentId }, `Deleting agent ${agentId} from registry`);
-
-    const knownWorkspaceId =
-      this.agentManager.getAgent(agentId)?.workspaceId ??
-      (await this.agentStorage.get(agentId))?.workspaceId ??
-      null;
-
-    // File-backed storage still needs an early delete fence before closeAgent().
-    beginAgentDeleteIfSupported(this.agentStorage, agentId);
-
-    try {
-      await closeAgentCommand({ agentManager: this.agentManager }, agentId);
-    } catch (error) {
-      this.sessionLogger.warn(
-        { err: error, agentId },
-        `Failed to close agent ${agentId} during delete`,
-      );
-    }
-
-    // Drain queued persistence from the just-closed agent before removing its
-    // durable snapshot, otherwise an in-flight background write can recreate it.
-    await this.agentManager.flush();
-
-    try {
-      await this.agentStorage.remove(agentId);
-      await this.agentManager.deleteAgentState(agentId);
-    } catch (error) {
-      this.sessionLogger.error({ err: error, agentId }, `Failed to fully delete agent ${agentId}`);
-    }
-
-    this.emit({
-      type: "agent_deleted",
-      payload: {
-        agentId,
-        requestId,
-      },
-    });
-
-    await this.agentUpdates.removeAgent(agentId);
-
-    if (knownWorkspaceId) {
-      await this.workspaceSession.emitWorkspaceUpdateForWorkspaceId(knownWorkspaceId);
-    }
-  }
-
-  private async handleArchiveAgentRequest(agentId: string, requestId: string): Promise<void> {
-    this.sessionLogger.info({ agentId }, `Archiving agent ${agentId}`);
-
-    const { archivedAt } = await this.archiveAgentForClose(agentId);
-
-    this.emit({
-      type: "agent_archived",
-      payload: {
-        agentId,
-        archivedAt,
-        requestId,
-      },
-    });
-  }
-
-  private async archiveAgentForClose(
-    agentId: string,
-  ): Promise<{ agentId: string; archivedAt: string }> {
-    const { archivedAt, record: archivedRecord } = await archiveAgentCommand(
-      {
-        agentManager: this.agentManager,
-        agentStorage: this.agentStorage,
-        logger: this.sessionLogger,
-      },
-      agentId,
-    );
-
-    if (archivedRecord && this.agentUpdates.hasSubscription()) {
-      const payload = await this.agentUpdates.emitStoredRecord(archivedRecord);
-      if (payload.workspaceId) {
-        await this.workspaceSession.emitWorkspaceUpdateForWorkspaceId(payload.workspaceId);
-      }
-    }
-
-    return { agentId, archivedAt };
-  }
-
-  private async handleDetachAgentRequest(agentId: string, requestId: string): Promise<void> {
-    this.sessionLogger.info({ agentId, requestId }, "Detaching agent from parent");
-
-    try {
-      const result = await detachAgentCommand({ agentManager: this.agentManager }, agentId);
-      const affectedWorkspaceIds = new Set<string>();
-
-      if (!result.live) {
-        const payload = await this.agentUpdates.emitStoredRecord(result.record);
-        if (payload.workspaceId) {
-          affectedWorkspaceIds.add(payload.workspaceId);
-        }
-      } else if (result.record.workspaceId) {
-        affectedWorkspaceIds.add(result.record.workspaceId);
-      }
-
-      if (result.previousParentAgentId) {
-        const rootWorkspaceId = await this.resolveDelegationRootWorkspaceId(
-          result.previousParentAgentId,
-        );
-        if (rootWorkspaceId) {
-          affectedWorkspaceIds.add(rootWorkspaceId);
-        }
-      }
-
-      await this.workspaceSession.emitWorkspaceUpdatesForWorkspaceIds(affectedWorkspaceIds);
-
-      this.emit({
-        type: "agent.detach.response",
-        payload: {
-          requestId,
-          agentId,
-          accepted: true,
-          error: null,
-        },
-      });
-    } catch (error) {
-      const message = getErrorMessageOr(error, "Failed to detach agent");
-      this.sessionLogger.error({ err: error, agentId, requestId }, "Failed to detach agent");
-      this.emit({
-        type: "agent.detach.response",
-        payload: {
-          requestId,
-          agentId,
-          accepted: false,
-          error: message,
-        },
-      });
-    }
-  }
-
-  private async handleCloseItemsRequest(msg: CloseItemsRequest): Promise<void> {
-    const archiveResults = await Promise.allSettled(
-      msg.agentIds.map((agentId) => this.archiveAgentForClose(agentId)),
-    );
-    const agents = [];
-    for (let i = 0; i < archiveResults.length; i += 1) {
-      const result = archiveResults[i];
-      if (result.status === "fulfilled") {
-        agents.push(result.value);
-      } else {
-        this.sessionLogger.warn(
-          { err: result.reason, agentId: msg.agentIds[i], requestId: msg.requestId },
-          "Failed to archive agent during close_items batch",
-        );
-      }
-    }
-
-    const terminals = [];
-    for (const terminalId of msg.terminalIds) {
-      try {
-        terminals.push(this.terminalController.killTerminalForClose(terminalId));
-      } catch (error) {
-        this.sessionLogger.warn(
-          { err: error, terminalId, requestId: msg.requestId },
-          "Failed to kill terminal during close_items batch",
-        );
-        terminals.push({
-          terminalId,
-          success: false,
-        });
-      }
-    }
-
-    this.emit({
-      type: "close_items_response",
-      payload: {
-        agents,
-        terminals,
-        requestId: msg.requestId,
-      },
-    });
-  }
-
-  private async handleUpdateAgentRequest(
-    agentId: string,
-    name: string | undefined,
-    labels: Record<string, string> | undefined,
-    requestId: string,
-  ): Promise<void> {
-    this.sessionLogger.info(
-      {
-        agentId,
-        requestId,
-        hasName: typeof name === "string",
-        labelCount: labels ? Object.keys(labels).length : 0,
-      },
-      "session: update_agent_request",
-    );
-
-    try {
-      const result = await updateAgentCommand(
-        { agentManager: this.agentManager },
-        { agentId, name, labels },
-      );
-
-      if (!result.accepted) {
-        this.emit({
-          type: "update_agent_response",
-          payload: {
-            requestId,
-            agentId,
-            accepted: false,
-            error: result.error,
-          },
-        });
-        return;
-      }
-
-      this.emit({
-        type: "update_agent_response",
-        payload: { requestId, agentId, accepted: true, error: null },
-      });
-    } catch (error) {
-      this.sessionLogger.error(
-        { err: error, agentId, requestId },
-        "session: update_agent_request error",
-      );
-      this.emit({
-        type: "activity_log",
-        payload: {
-          id: uuidv4(),
-          timestamp: new Date(),
-          type: "error",
-          content: `Failed to update agent: ${getErrorMessage(error)}`,
-        },
-      });
-      this.emit({
-        type: "update_agent_response",
-        payload: {
-          requestId,
-          agentId,
-          accepted: false,
-          error: getErrorMessageOr(error, "Failed to update agent"),
-        },
-      });
     }
   }
 
@@ -3785,58 +3514,6 @@ export class Session {
     }
   }
 
-  private async handleCreateAgentRequest(msg: CreateAgentRequestMessage): Promise<void> {
-    try {
-      let agent: AgentSnapshotPayload;
-      if (msg.idempotencyKey !== undefined) {
-        if (msg.initialPrompt !== undefined) {
-          throw new Error("Idempotent creation requires sending the initial prompt separately");
-        }
-        const creation = await this.createRequestedAgent({ ...msg, type: "agent.create.request" });
-        if (creation.error || !creation.agent)
-          throw new SessionRequestError(
-            creation.errorCode ?? "unknown",
-            creation.error ?? "Agent creation failed",
-          );
-        const record = await this.agentStorage.get(creation.agent.id);
-        if (!record) throw new Error("Previously created agent no longer exists");
-        agent = this.buildStoredAgentPayload(record);
-      } else {
-        ({ agent } = await this.createSessionAgent(msg));
-      }
-      this.emit({
-        type: "status",
-        payload: {
-          status: "agent_created",
-          agentId: agent.id,
-          requestId: msg.requestId,
-          agent,
-        },
-      });
-    } catch (error) {
-      const wireError = error instanceof SessionRequestError ? error : toWorktreeWireError(error);
-      this.sessionLogger.error({ err: error }, "Failed to create agent");
-      this.emit({
-        type: "status",
-        payload: {
-          status: "agent_create_failed",
-          requestId: msg.requestId,
-          error: wireError.message,
-          errorCode: wireError.code,
-        },
-      });
-      this.emit({
-        type: "activity_log",
-        payload: {
-          id: uuidv4(),
-          timestamp: new Date(),
-          type: "error",
-          content: `Failed to create agent: ${wireError.message}`,
-        },
-      });
-    }
-  }
-
   private validatePublicAgentWorkspaceIntent(
     request: CreateAgentRequestMessage,
     createsWorktree: boolean,
@@ -4213,50 +3890,6 @@ export class Session {
   }
 
   /**
-   * Handle clearing agent attention flag
-   */
-  private async handleClearAgentAttention(
-    agentId: string | string[],
-    requestId?: string,
-  ): Promise<void> {
-    const agentIds = Array.isArray(agentId) ? agentId : [agentId];
-
-    try {
-      await Promise.all(
-        agentIds.map((id) =>
-          ensureAgentLoaded(id, {
-            agentManager: this.agentManager,
-            agentStorage: this.agentStorage,
-            logger: this.sessionLogger,
-          }),
-        ),
-      );
-      await Promise.all(agentIds.map((id) => this.agentManager.clearAgentAttention(id)));
-      if (requestId) {
-        const agents = (
-          await Promise.all(
-            agentIds.map(async (id) => {
-              const agent = this.agentManager.getAgent(id);
-              return agent ? this.buildAgentPayload(agent) : null;
-            }),
-          )
-        ).filter((payload): payload is NonNullable<typeof payload> => payload !== null);
-        this.emit({
-          type: "clear_agent_attention_response",
-          payload: {
-            requestId,
-            agentId,
-            agents,
-          },
-        });
-      }
-    } catch (error) {
-      this.sessionLogger.error({ err: error, agentIds }, "Failed to clear agent attention");
-      // Don't throw - this is not critical
-    }
-  }
-
-  /**
    * Handle client heartbeat for activity tracking
    */
   private handleClientHeartbeat(msg: {
@@ -4307,49 +3940,6 @@ export class Session {
     this.currentClientMetadata().pushToken = token;
     this.pushNotifications.renew(token);
     this.sessionLogger.info("Registered push token");
-  }
-
-  /**
-   * Handle agent permission response from user
-   */
-  private async handleAgentPermissionResponse(
-    agentId: string,
-    requestId: string,
-    response: AgentPermissionResponse,
-  ): Promise<void> {
-    try {
-      await respondToAgentPermission({
-        agentManager: this.agentManager,
-        agentId,
-        requestId,
-        response,
-        logger: this.sessionLogger,
-      });
-      // COMPAT(ownedSubscriptions): added in v0.8.0, remove after 2027-03-09.
-      // Legacy clients consume the single domain resolution; modern request outcomes
-      // are independent of whether this socket (or its logical Session) observes it.
-      if (this.delivery.isModern(this.delivery.currentSource)) {
-        this.delivery.reply({
-          type: "agent_permission_resolved",
-          payload: { agentId, requestId, resolution: response },
-        });
-      }
-    } catch (error) {
-      this.sessionLogger.error(
-        { err: error, agentId, requestId },
-        "Failed to respond to permission",
-      );
-      this.emit({
-        type: "activity_log",
-        payload: {
-          id: uuidv4(),
-          timestamp: new Date(),
-          type: "error",
-          content: `Failed to respond to permission: ${getErrorMessage(error)}`,
-        },
-      });
-      throw error;
-    }
   }
 
   private async handlePaseoWorktreeListRequest(
@@ -4428,129 +4018,6 @@ export class Session {
     return this.agentDirectory.list(filter);
   }
 
-  private async resolveAgentIdentifier(
-    identifier: string,
-  ): Promise<{ ok: true; agentId: string } | { ok: false; notFound: boolean; error: string }> {
-    const trimmed = identifier.trim();
-    if (!trimmed) {
-      return { ok: false, notFound: false, error: "Agent identifier cannot be empty" };
-    }
-
-    // An internal agent, live or recently archived, is addressable by its exact
-    // id and nothing else: the caller that created it holds the id, and no
-    // listing ever includes it.
-    if (this.agentManager.getAgent(trimmed) || this.agentManager.getRetiredInternalAgent(trimmed)) {
-      return { ok: true, agentId: trimmed };
-    }
-
-    const stored = await this.agentStorage.list();
-    const storedRecords = stored.filter((record) => !record.internal);
-    const knownIds = new Set<string>();
-    for (const record of storedRecords) {
-      knownIds.add(record.id);
-    }
-    for (const agent of this.agentManager.listAgents()) {
-      knownIds.add(agent.id);
-    }
-
-    if (knownIds.has(trimmed)) {
-      return { ok: true, agentId: trimmed };
-    }
-
-    const prefixMatches = Array.from(knownIds).filter((id) => id.startsWith(trimmed));
-    if (prefixMatches.length === 1) {
-      return { ok: true, agentId: prefixMatches[0] };
-    }
-    if (prefixMatches.length > 1) {
-      return {
-        ok: false,
-        notFound: false,
-        error: `Agent identifier "${trimmed}" is ambiguous (${prefixMatches
-          .slice(0, 5)
-          .map((id) => id.slice(0, 8))
-          .join(", ")}${prefixMatches.length > 5 ? ", …" : ""})`,
-      };
-    }
-
-    const titleMatches = storedRecords.filter((record) => record.title === trimmed);
-    if (titleMatches.length === 1) {
-      return { ok: true, agentId: titleMatches[0].id };
-    }
-    if (titleMatches.length > 1) {
-      return {
-        ok: false,
-        notFound: false,
-        error: `Agent title "${trimmed}" is ambiguous (${titleMatches
-          .slice(0, 5)
-          .map((r) => r.id.slice(0, 8))
-          .join(", ")}${titleMatches.length > 5 ? ", …" : ""})`,
-      };
-    }
-
-    return { ok: false, notFound: true, error: `Agent not found: ${trimmed}` };
-  }
-
-  /**
-   * An agent that is no longer live, in its settled form: the retained snapshot
-   * of a recently archived internal agent, else its stored record. Null when
-   * neither exists, and for a stored internal record, which is never served.
-   */
-  private async readSettledAgent(
-    agentId: string,
-  ): Promise<{ record: StoredAgentRecord; lastMessage: string | null } | null> {
-    const retired = this.agentManager.getRetiredInternalAgent(agentId);
-    if (retired) {
-      return { record: retired.record, lastMessage: retired.lastMessage };
-    }
-    const record = await this.agentStorage.get(agentId);
-    if (!record || record.internal) {
-      return null;
-    }
-    return { record, lastMessage: null };
-  }
-
-  private async getAgentPayloadById(agentId: string): Promise<AgentSnapshotPayload | null> {
-    const live = this.agentManager.getAgent(agentId);
-    if (live) {
-      const payload = await this.buildAgentPayload(live);
-      return this.isProviderVisibleToClient(payload.provider) ? payload : null;
-    }
-
-    const settled = await this.readSettledAgent(agentId);
-    if (!settled) {
-      return null;
-    }
-    const payload = this.buildStoredAgentPayload(settled.record);
-    return this.isProviderVisibleToClient(payload.provider) ? payload : null;
-  }
-
-  private async resolveDelegationRootWorkspaceId(agentId: string): Promise<string | null> {
-    const seen = new Set<string>();
-    let currentAgentId = agentId;
-
-    while (true) {
-      if (seen.has(currentAgentId)) {
-        return null;
-      }
-      seen.add(currentAgentId);
-
-      const live = this.agentManager.getAgent(currentAgentId);
-      const source = live ?? (await this.agentStorage.get(currentAgentId));
-      if (!source) {
-        return null;
-      }
-      if ("archivedAt" in source && source.archivedAt) {
-        return null;
-      }
-
-      const parentAgentId = getParentAgentIdFromLabels(source.labels);
-      if (!parentAgentId) {
-        return source.workspaceId ?? null;
-      }
-      currentAgentId = parentAgentId;
-    }
-  }
-
   private async buildActiveProjectPlacementsByWorkspaceId(): Promise<
     Map<string, ProjectPlacementPayload>
   > {
@@ -4581,189 +4048,6 @@ export class Session {
     }
 
     return placementsByWorkspaceId;
-  }
-
-  private async collectFetchAgentsEntries(params: {
-    candidates: AgentSnapshotPayload[];
-    limit: number;
-    getPlacement: (workspaceId: string | undefined) => Promise<ProjectPlacementPayload | null>;
-    filter: AgentUpdatesFilter | undefined;
-    search?: string;
-  }): Promise<FetchAgentsResponseEntry[]> {
-    const { candidates, limit, getPlacement, filter, search } = params;
-    const matchedEntries: FetchAgentsResponseEntry[] = [];
-    const batchSize = 25;
-    for (
-      let start = 0;
-      start < candidates.length && matchedEntries.length <= limit;
-      start += batchSize
-    ) {
-      const batch = candidates.slice(start, start + batchSize);
-      const batchEntries = await Promise.all(
-        batch.map(async (agent) => {
-          const project = await getPlacement(agent.workspaceId);
-          return project ? { agent, project } : null;
-        }),
-      );
-      for (const entry of batchEntries) {
-        if (!entry) {
-          continue;
-        }
-        if (
-          !matchesAgentUpdatesFilter({
-            agent: entry.agent,
-            project: entry.project,
-            filter,
-          })
-        ) {
-          continue;
-        }
-        if (search && !matchesAgentHistoryQuery(search, entry)) continue;
-        matchedEntries.push(entry);
-        if (matchedEntries.length > limit) {
-          break;
-        }
-      }
-    }
-    return matchedEntries;
-  }
-
-  private async listFetchAgentsEntries(request: AgentDirectoryRequestMessage): Promise<{
-    entries: FetchAgentsResponseEntry[];
-    pageInfo: FetchAgentsResponsePageInfo;
-    searchTruncated?: boolean;
-  }> {
-    const filter =
-      request.type === "fetch_agent_history_request" &&
-      request.filter?.includeArchived === undefined
-        ? { ...request.filter, includeArchived: true }
-        : request.filter;
-    const scope = request.type === "fetch_agents_request" ? request.scope : undefined;
-    const sort = this.agentsPager.normalizeSort(request.sort);
-
-    let agents = await this.listAgentPayloads({
-      labels: filter?.labels,
-      includeArchived: filter?.includeArchived,
-      includeBackground:
-        filter?.includeBackground ||
-        (request.type === "fetch_agents_request" && request.includeBackground),
-      includeUnavailablePersisted: request.type === "fetch_agent_history_request",
-    });
-    if (request.type === "fetch_agent_history_request" && !filter?.labels) {
-      agents = agents.filter(
-        (agent) =>
-          !(
-            agent.archivedAt &&
-            (Boolean(getParentAgentIdFromLabels(agent.labels)) ||
-              agent.provider.endsWith("-worker") ||
-              agent.provider.startsWith("slp-"))
-          ),
-      );
-    }
-    const activePlacementsByWorkspaceId =
-      scope === "active" ? await this.buildActiveProjectPlacementsByWorkspaceId() : null;
-    if (activePlacementsByWorkspaceId) {
-      agents = agents.filter(
-        (agent) =>
-          !agent.archivedAt &&
-          agent.workspaceId != null &&
-          activePlacementsByWorkspaceId.has(agent.workspaceId),
-      );
-    }
-
-    const placementByWorkspaceId = new Map<string, Promise<ProjectPlacementPayload | null>>();
-    const getPlacement = (
-      workspaceId: string | undefined,
-    ): Promise<ProjectPlacementPayload | null> => {
-      if (!workspaceId) {
-        return Promise.resolve(null);
-      }
-      if (activePlacementsByWorkspaceId) {
-        return Promise.resolve(activePlacementsByWorkspaceId.get(workspaceId) ?? null);
-      }
-      const existing = placementByWorkspaceId.get(workspaceId);
-      if (existing) {
-        return existing;
-      }
-      const placementPromise = this.buildProjectPlacementForWorkspaceId(workspaceId);
-      placementByWorkspaceId.set(workspaceId, placementPromise);
-      return placementPromise;
-    };
-
-    const search = agentDirectorySearchQuery(request);
-    let candidates = [...agents];
-    candidates.sort((left, right) => this.agentsPager.compare(left, right, sort));
-    const cursorToken = request.page?.cursor;
-    if (cursorToken) {
-      const cursor = this.decodeAgentCursor(cursorToken, sort);
-      candidates = candidates.filter(
-        (agent) => this.agentsPager.compareWithCursor(agent, cursor, sort) > 0,
-      );
-    }
-
-    const limit = request.page?.limit ?? 200;
-
-    const matchedEntries = await this.collectFetchAgentsEntries({
-      candidates,
-      limit,
-      getPlacement,
-      filter,
-      search,
-    });
-
-    const pagedEntries = matchedEntries.slice(0, limit);
-    const hasMore = matchedEntries.length > limit;
-    const nextCursor =
-      hasMore && pagedEntries.length > 0
-        ? this.agentsPager.encode(pagedEntries[pagedEntries.length - 1].agent, sort)
-        : null;
-
-    return {
-      entries: pagedEntries,
-      pageInfo: {
-        nextCursor,
-        prevCursor: request.page?.cursor ?? null,
-        hasMore,
-      },
-    };
-  }
-
-  private readonly agentsPager = new SortablePager<
-    AgentSnapshotPayload,
-    FetchAgentsRequestSort["key"]
-  >({
-    validKeys: FETCH_AGENTS_SORT_KEYS,
-    defaultSort: [{ key: "updated_at", direction: "desc" }],
-    label: "fetch_agents",
-    getId: (agent) => agent.id,
-    getSortValue: (agent, key): number | string => {
-      switch (key) {
-        case "status_priority":
-          return getAgentStatusPriority({
-            status: agent.status,
-            pendingPermissionCount: agent.pendingPermissions?.length ?? 0,
-            requiresAttention: agent.requiresAttention,
-            attentionReason: agent.attentionReason ?? null,
-          });
-        case "created_at":
-          return Date.parse(agent.createdAt);
-        case "updated_at":
-          return Date.parse(agent.updatedAt);
-        case "title":
-          return agent.title?.toLocaleLowerCase() ?? "";
-      }
-    },
-  });
-
-  private decodeAgentCursor(token: string, sort: SortSpec<FetchAgentsRequestSort["key"]>[]) {
-    try {
-      return this.agentsPager.decode(token, sort);
-    } catch (error) {
-      if (error instanceof CursorError) {
-        throw new SessionRequestError("invalid_cursor", error.message);
-      }
-      throw error;
-    }
   }
 
   // external path→workspace adapter, not ownership. Used by archive-by-path flows
@@ -4815,148 +4099,6 @@ export class Session {
       }));
   }
 
-  private async handleFetchAgents(
-    request: Extract<SessionInboundMessage, { type: "fetch_agents_request" }>,
-  ): Promise<void> {
-    const owner = request.subscribe
-      ? this.delivery.begin("agents", request.subscribe.subscriptionId, (id) => {
-          this.agentUpdates.clearSubscription(id);
-          this.refreshObservationProducers();
-        })
-      : null;
-    const subscriptionId = owner?.responseId;
-    try {
-      if (owner) {
-        this.agentUpdates.beginSubscription({
-          subscriptionId: owner.id,
-          isProviderVisible: (provider) =>
-            this.delivery.forSource(owner.source, () => this.isProviderVisibleToClient(provider)),
-          filter: {
-            ...request.filter,
-            ...(request.includeBackground ? { includeBackground: true } : {}),
-          },
-          syncEnabled: Boolean(request.sync),
-          emit: (message) => {
-            if (message.type === "agent_update") owner.emit(message);
-          },
-        });
-        this.refreshObservationProducers();
-      }
-
-      const payload = request.sync
-        ? await this.readAgentDirectorySync(request)
-        : await this.listFetchAgentsEntries(request);
-      const snapshotUpdatedAtByAgentId = new Map<string, number>();
-      for (const entry of payload.entries) {
-        const parsedUpdatedAt = Date.parse(entry.agent.updatedAt);
-        if (!Number.isNaN(parsedUpdatedAt)) {
-          snapshotUpdatedAtByAgentId.set(entry.agent.id, parsedUpdatedAt);
-        }
-      }
-
-      this.emit({
-        type: "fetch_agents_response",
-        payload: {
-          requestId: request.requestId,
-          ...(subscriptionId ? { subscriptionId } : {}),
-          ...payload,
-        },
-      });
-
-      if (subscriptionId) {
-        this.agentUpdates.flushBootstrapped(owner!.id, { snapshotUpdatedAtByAgentId });
-      }
-    } catch (error) {
-      if (subscriptionId) {
-        await owner?.release();
-      }
-      const code = error instanceof SessionRequestError ? error.code : "fetch_agents_failed";
-      const message = error instanceof Error ? error.message : "Failed to fetch agents";
-      this.sessionLogger.error({ err: error }, "Failed to handle fetch_agents_request");
-      this.emit({
-        type: "rpc_error",
-        payload: {
-          requestId: request.requestId,
-          requestType: request.type,
-          error: message,
-          code,
-        },
-      });
-    }
-  }
-
-  private async handleFetchAgentHistory(
-    request: Extract<SessionInboundMessage, { type: "fetch_agent_history_request" }>,
-  ): Promise<void> {
-    try {
-      const payload = await this.listFetchAgentsEntries(request);
-      this.emit({
-        type: "fetch_agent_history_response",
-        payload: {
-          requestId: request.requestId,
-          ...payload,
-        },
-      });
-    } catch (error) {
-      const code = error instanceof SessionRequestError ? error.code : "fetch_agent_history_failed";
-      const message = error instanceof Error ? error.message : "Failed to fetch agent history";
-      this.sessionLogger.error({ err: error }, "Failed to handle fetch_agent_history_request");
-      this.emit({
-        type: "rpc_error",
-        payload: {
-          requestId: request.requestId,
-          requestType: request.type,
-          error: message,
-          code,
-        },
-      });
-    }
-  }
-
-  private async handleFetchRecentProviderSessions(
-    request: Extract<SessionInboundMessage, { type: "fetch_recent_provider_sessions_request" }>,
-  ): Promise<void> {
-    try {
-      const result = await listImportableProviderSessions({
-        request,
-        agentManager: this.agentManager,
-        agentStorage: this.agentStorage,
-        providerSnapshotManager: this.providerSnapshotManager,
-      });
-      this.emit({
-        type: "fetch_recent_provider_sessions_response",
-        payload: {
-          requestId: request.requestId,
-          entries: result.entries,
-          ...(result.filteredAlreadyImportedCount > 0
-            ? { filteredAlreadyImportedCount: result.filteredAlreadyImportedCount }
-            : {}),
-          ...(result.providerErrors.length > 0 ? { providerErrors: result.providerErrors } : {}),
-        },
-      });
-    } catch (error) {
-      const code =
-        error instanceof ImportSessionsRequestError
-          ? error.code
-          : "fetch_recent_provider_sessions_failed";
-      const message =
-        error instanceof Error ? error.message : "Failed to fetch recent provider sessions";
-      this.sessionLogger.error(
-        { err: error },
-        "Failed to handle fetch_recent_provider_sessions_request",
-      );
-      this.emit({
-        type: "rpc_error",
-        payload: {
-          requestId: request.requestId,
-          requestType: request.type,
-          error: message,
-          code,
-        },
-      });
-    }
-  }
-
   private async handleProjectListRequest(
     request: Extract<SessionInboundMessage, { type: "project.list.request" }>,
   ): Promise<void> {
@@ -4988,33 +4130,6 @@ export class Session {
         },
       });
     }
-  }
-
-  private async readAgentDirectorySync(
-    request: Extract<SessionInboundMessage, { type: "fetch_agents_request" }>,
-  ) {
-    if (request.scope !== "active" || request.filter) {
-      throw new SessionRequestError(
-        "invalid_request",
-        "Sequenced agent directory reads require scope=active and no filter.",
-      );
-    }
-    const snapshot = await this.listFetchAgentsEntries({
-      ...request,
-      includeBackground: true,
-      page: { limit: Number.MAX_SAFE_INTEGER },
-    });
-    const result = this.directorySync.synchronizeAgents(
-      snapshot.entries,
-      request.sync ?? {},
-      request.includeBackground,
-    );
-    const entries = await Promise.all(
-      result.entries.map(async (entry) =>
-        (await this.agentDirectory.includes(entry.agent, request.includeBackground)) ? entry : null,
-      ),
-    );
-    return { ...result, entries: entries.filter((entry) => entry !== null) };
   }
 
   private async registerWorkspaceForImportedAgent(
@@ -6042,40 +5157,6 @@ export class Session {
     }
   }
 
-  private async handleFetchAgent(agentIdOrIdentifier: string, requestId: string): Promise<void> {
-    // An unknown agent is a null agent, not an error. Errors are for empty or ambiguous identifiers.
-    const resolved = await this.resolveAgentIdentifier(agentIdOrIdentifier);
-    if (!resolved.ok) {
-      this.emit({
-        type: "fetch_agent_response",
-        payload: {
-          requestId,
-          agent: null,
-          project: null,
-          error: resolved.notFound ? null : resolved.error,
-        },
-      });
-      return;
-    }
-
-    const agent = await this.getAgentPayloadById(resolved.agentId);
-    if (!agent) {
-      this.emit({
-        type: "fetch_agent_response",
-        payload: { requestId, agent: null, project: null, error: null },
-      });
-      return;
-    }
-
-    const project = agent.workspaceId
-      ? await this.buildProjectPlacementForWorkspaceId(agent.workspaceId)
-      : null;
-    this.emit({
-      type: "fetch_agent_response",
-      payload: { requestId, agent, project, error: null },
-    });
-  }
-
   private async handleFetchAgentTimelineRequest(
     msg: Extract<SessionInboundMessage, { type: "fetch_agent_timeline_request" }>,
     source?: object,
@@ -6503,239 +5584,6 @@ export class Session {
           error: error instanceof Error ? error.message : String(error),
         },
       });
-    }
-  }
-
-  private async prepareAgentMessage(agentId: string, text: string): Promise<void> {
-    await ensureAgentLoaded(agentId, {
-      agentManager: this.agentManager,
-      agentStorage: this.agentStorage,
-      logger: this.sessionLogger,
-    });
-    const stored = await this.agentStorage.get(agentId);
-    if (stored && !stored.title && !stored.lastUserMessageAt) {
-      const { provisionalTitle } = resolveCreateAgentTitles({ initialPrompt: text });
-      if (provisionalTitle) await this.agentManager.setTitle(agentId, provisionalTitle);
-    }
-  }
-
-  private async handleSendAgentMessageRequest(
-    msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
-  ): Promise<void> {
-    const resolved = await this.resolveAgentIdentifier(msg.agentId);
-    if (!resolved.ok) {
-      this.emit({
-        type: "send_agent_message_response",
-        payload: {
-          requestId: msg.requestId,
-          agentId: msg.agentId,
-          accepted: false,
-          error: resolved.error,
-        },
-      });
-      return;
-    }
-
-    try {
-      const agentId = resolved.agentId;
-
-      const prompt = buildAgentPrompt(msg.text, msg.images, msg.attachments);
-      this.sessionLogger.trace(
-        {
-          agentId,
-          messageId: msg.messageId,
-          activeTurnBehavior: msg.activeTurnBehavior,
-          textPrefix: msg.text.slice(0, 80),
-        },
-        "agent.session.send_agent_message",
-      );
-      const send = async () => {
-        const result = await sendPromptToAgent({
-          agentManager: this.agentManager,
-          agentStorage: this.agentStorage,
-          agentId,
-          prompt,
-          source: msg.sourceAgentId
-            ? { kind: "agent-message", agentId: msg.sourceAgentId }
-            : undefined,
-          messageId: msg.messageId,
-          activeTurnBehavior: msg.activeTurnBehavior ?? "interrupt",
-          clearPendingPermissions: true,
-          logger: this.sessionLogger,
-        });
-        if (result.disposition === "turn_started") {
-          await waitForAgentRunStartWithTimeout(
-            this.agentManager,
-            agentId,
-            this.delivery.requestSignal,
-          );
-        }
-      };
-      if (msg.messageId) {
-        await this.messageReceipts.send({
-          agentId,
-          messageId: msg.messageId,
-          request: {
-            prompt,
-            sourceAgentId: msg.sourceAgentId,
-            activeTurnBehavior: msg.activeTurnBehavior ?? "interrupt",
-          },
-          prepare: async () => {
-            if (!msg.sourceAgentId) await this.prepareAgentMessage(agentId, msg.text);
-          },
-          send,
-        });
-      } else {
-        await send();
-      }
-
-      this.emit({
-        type: "send_agent_message_response",
-        payload: {
-          requestId: msg.requestId,
-          agentId,
-          accepted: true,
-          error: null,
-        },
-      });
-    } catch (error) {
-      if (this.delivery.requestSignal.aborted) return;
-      this.handleAgentRunError(resolved.agentId, error, "Failed to send agent message");
-      this.emit({
-        type: "send_agent_message_response",
-        payload: {
-          requestId: msg.requestId,
-          agentId: resolved.agentId,
-          accepted: false,
-          error: errorToFriendlyMessage(error),
-        },
-      });
-    }
-  }
-
-  private async handleWaitForFinish(
-    agentIdOrIdentifier: string,
-    requestId: string,
-    timeoutMs?: number,
-  ): Promise<void> {
-    const sourceSignal = this.delivery.requestSignal;
-    sourceSignal.throwIfAborted();
-    const resolved = await this.resolveAgentIdentifier(agentIdOrIdentifier);
-    if (!resolved.ok) {
-      this.emit({
-        type: "wait_for_finish_response",
-        payload: {
-          requestId,
-          status: "error",
-          final: null,
-          error: resolved.error,
-          lastMessage: null,
-        },
-      });
-      return;
-    }
-
-    const agentId = resolved.agentId;
-    const live = this.agentManager.getAgent(agentId);
-    if (!live) {
-      const settled = await this.readSettledAgent(agentId);
-      if (!settled) {
-        this.emit({
-          type: "wait_for_finish_response",
-          payload: {
-            requestId,
-            status: "error",
-            final: null,
-            error: `Agent not found: ${agentId}`,
-            lastMessage: null,
-          },
-        });
-        return;
-      }
-      const { record, lastMessage } = settled;
-      const final = this.buildStoredAgentPayload(record);
-      let status: "permission" | "error" | "idle";
-      if (record.attentionReason === "permission") {
-        status = "permission";
-      } else if (record.lastStatus === "error") {
-        status = "error";
-      } else {
-        status = "idle";
-      }
-      const error = resolveWaitForFinishError({ status, final });
-      this.emit({
-        type: "wait_for_finish_response",
-        payload: { requestId, status, final, error, lastMessage },
-      });
-      return;
-    }
-
-    const abortController = new AbortController();
-    const hasTimeout = typeof timeoutMs === "number" && timeoutMs > 0;
-    const timeoutHandle = hasTimeout
-      ? setTimeout(() => {
-          abortController.abort("timeout");
-        }, timeoutMs)
-      : null;
-
-    try {
-      let result = await this.agentManager.waitForAgentEvent(agentId, {
-        signal: AbortSignal.any([abortController.signal, sourceSignal]),
-        waitForActive: true,
-      });
-      let final = await this.getAgentPayloadById(agentId);
-      if (!final) {
-        throw new Error(`Agent ${agentId} disappeared while waiting`);
-      }
-
-      let status: "permission" | "error" | "idle";
-      if (result.permission) {
-        status = "permission";
-      } else if (result.status === "error") {
-        status = "error";
-      } else {
-        status = "idle";
-      }
-      const error = resolveWaitForFinishError({ status, final });
-
-      this.emit({
-        type: "wait_for_finish_response",
-        payload: { requestId, status, final, error, lastMessage: result.lastMessage },
-      });
-    } catch (error) {
-      if (sourceSignal.aborted) return;
-      const isAbort =
-        error instanceof Error &&
-        (error.name === "AbortError" || error.message.toLowerCase().includes("aborted"));
-      if (!isAbort) {
-        const message = errorToFriendlyMessage(error);
-        this.sessionLogger.error({ err: error, agentId }, "wait_for_finish_request failed");
-        const final = await this.getAgentPayloadById(agentId);
-        this.emit({
-          type: "wait_for_finish_response",
-          payload: {
-            requestId,
-            status: "error",
-            final,
-            error: message,
-            lastMessage: null,
-          },
-        });
-        return;
-      }
-
-      const final = await this.getAgentPayloadById(agentId);
-      if (!final) {
-        throw new Error(`Agent ${agentId} disappeared while waiting`, { cause: error });
-      }
-      this.emit({
-        type: "wait_for_finish_response",
-        payload: { requestId, status: "timeout", final, error: null, lastMessage: null },
-      });
-    } finally {
-      if (timeoutHandle) {
-        clearTimeout(timeoutHandle);
-      }
     }
   }
 

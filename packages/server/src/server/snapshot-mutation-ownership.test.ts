@@ -11,8 +11,11 @@ import { Session } from "./session.js";
 import type { SessionOptions } from "./session.js";
 import { OWNER_PERMISSIONS } from "./authorization/index.js";
 import { createTestPaseoDaemon } from "./test-utils/paseo-daemon.js";
-import { asInternals, createStub } from "./test-utils/class-mocks.js";
-import { createProviderSnapshotManagerStub } from "./test-utils/session-stubs.js";
+import { createStub } from "./test-utils/class-mocks.js";
+import {
+  asSessionInternals,
+  createProviderSnapshotManagerStub,
+} from "./test-utils/session-stubs.js";
 
 interface SessionInternals {
   archiveAgentForClose(agentId: string): Promise<{ archivedAt: string }>;
@@ -101,7 +104,7 @@ describe("snapshot mutation ownership boundary", () => {
       error: vi.fn(),
     };
 
-    const session = asInternals<SessionInternals>(
+    const session = asSessionInternals<SessionInternals>(
       new Session({
         messageReceipts: createMessageReceiptsStub(),
         creationService: createTestCreationService(),
