@@ -6,7 +6,7 @@ import type { OutboundMessage } from "./protocol.js";
 
 /**
  * Standalone provider host: JSONL-RPC over stdio. stdout carries protocol frames only;
- * logs go to stderr. See paseo-rs/wip/paseo-provider-host/RPC.md.
+ * logs go to stderr. See paseo-rs/crates/paseo-provider-host/RPC.md.
  */
 export function runProviderHost(options?: {
   input?: NodeJS.ReadableStream;

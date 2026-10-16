@@ -1,6 +1,6 @@
 /**
  * Wire types for the provider-host JSONL-RPC protocol. One JSON object per line over stdio.
- * The authoritative description lives in paseo-rs/wip/paseo-provider-host/RPC.md.
+ * The authoritative description lives in paseo-rs/crates/paseo-provider-host/RPC.md.
  */
 
 export const PROVIDER_HOST_PROTOCOL_VERSION = 1;
@@ -41,7 +41,8 @@ export type RpcResponse =
   | { id: RpcId; result: unknown }
   | { id: RpcId | null; error: RpcErrorBody };
 
-export type OutboundMessage = RpcResponse | RpcNotification;
+/** Frames the host writes. Requests are host -> client reverse calls (`tool.call`). */
+export type OutboundMessage = RpcResponse | RpcNotification | RpcRequest;
 
 export class RpcError extends Error {
   constructor(
@@ -60,3 +61,8 @@ export const CANCEL_METHOD = "$/cancel";
 export const SESSION_EVENT_METHOD = "session.event";
 /** Host -> client notification: `{ handle }`, sent when a session closes on its own. */
 export const SESSION_CLOSED_METHOD = "session.closed";
+
+/** Host -> client request: run an internal Paseo tool. `{ agentId?, tool, arguments }`. */
+export const TOOL_CALL_METHOD = "tool.call";
+/** Host -> client notification: `{ level, message, data? }`. */
+export const HOST_LOG_METHOD = "host.log";

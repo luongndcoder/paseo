@@ -22,16 +22,21 @@ import {
   type BuildProviderRegistryOptions,
   type ProviderDefinition,
 } from "../server/agent/provider-registry.js";
+import { OpenCodeBridge } from "../server/agent/providers/opencode/bridge.js";
+import type { PaseoToolCatalog, PaseoToolResult } from "../server/agent/tools/types.js";
 import {
   CANCEL_METHOD,
+  HOST_LOG_METHOD,
   PROVIDER_HOST_PROTOCOL_VERSION,
   RpcError,
   RpcErrorCode,
   SESSION_CLOSED_METHOD,
   SESSION_EVENT_METHOD,
+  TOOL_CALL_METHOD,
   type OutboundMessage,
   type RpcId,
 } from "./protocol.js";
+import { createProxyToolCatalog, type ToolSpec } from "./tool-proxy.js";
 
 type Params = Record<string, unknown>;
 
@@ -57,6 +62,18 @@ export interface InitializeParams {
   providers?: string[];
   providerOverrides?: BuildProviderRegistryOptions["providerOverrides"];
   runtimeSettings?: BuildProviderRegistryOptions["runtimeSettings"];
+  /**
+   * Directory the host may write runtime files into (the OpenCode bridge plugin lands in
+   * `<runtimeDir>/runtime/opencode`). The host never writes `$PASEO_HOME`. Without it the
+   * OpenCode bridge is off and OpenCode sessions get no native Paseo tools.
+   */
+  runtimeDir?: string;
+}
+
+/** Host -> client request awaiting its response. */
+interface OutboundRequest {
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
 }
 
 export interface ProviderHostOptions {
@@ -109,6 +126,29 @@ function prompt(params: Params): AgentPromptInput {
   );
 }
 
+interface RpcErrorBodyLike {
+  code?: unknown;
+  message?: unknown;
+  data?: unknown;
+}
+
+function toolSpecs(value: unknown[]): ToolSpec[] {
+  return value.map((entry) => {
+    if (
+      typeof entry !== "object" ||
+      entry === null ||
+      typeof (entry as ToolSpec).name !== "string" ||
+      typeof (entry as ToolSpec).description !== "string"
+    ) {
+      throw new RpcError(
+        RpcErrorCode.InvalidParams,
+        "tool specs must be objects with name and description",
+      );
+    }
+    return entry as ToolSpec;
+  });
+}
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -125,6 +165,9 @@ export class ProviderHost {
   private readonly pending = new Set<Promise<void>>();
   /** Sessions that finished creating after shutdown began and are being closed. */
   private readonly lateCloses = new Set<Promise<void>>();
+  private readonly outbound = new Map<RpcId, OutboundRequest>();
+  private nextOutboundId = 1;
+  private bridge: OpenCodeBridge | null = null;
   private nextHandle = 1;
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | null = null;
@@ -162,6 +205,14 @@ export class ProviderHost {
       return;
     }
     const { id, method, params } = message as { id?: unknown; method?: unknown; params?: unknown };
+    if (
+      method === undefined &&
+      (typeof id === "number" || typeof id === "string") &&
+      ("result" in message || "error" in message)
+    ) {
+      this.handleClientResponse(id, message as { result?: unknown; error?: RpcErrorBodyLike });
+      return;
+    }
     if (typeof method !== "string") {
       this.send({
         id: null,
@@ -199,8 +250,116 @@ export class ProviderHost {
   private async runShutdown(): Promise<void> {
     this.shuttingDown = true;
     for (const controller of this.inflight.values()) controller.abort();
+    this.rejectOutbound(new RpcError(RpcErrorCode.ShuttingDown, "host is shutting down"));
     await this.closeAllSessions();
     await shutdownAgentClients(this.clients.values(), this.logger);
+    await this.bridge?.close().catch((error: unknown) => {
+      this.logger.warn({ err: error }, "OpenCode bridge close failed");
+    });
+  }
+
+  /** Send a request to the client and wait for its response (`tool.call`). */
+  requestClient(method: string, params: unknown, signal?: AbortSignal): Promise<unknown> {
+    if (this.shuttingDown) {
+      return Promise.reject(new RpcError(RpcErrorCode.ShuttingDown, "host is shutting down"));
+    }
+    const id = `h${this.nextOutboundId++}`;
+    return new Promise<unknown>((resolve, reject) => {
+      const onAbort = () => {
+        if (!this.outbound.delete(id)) return;
+        this.send({ method: CANCEL_METHOD, params: { id } });
+        reject(new RpcError(RpcErrorCode.Canceled, "request canceled"));
+      };
+      const settle =
+        <T>(fn: (value: T) => void) =>
+        (value: T) => {
+          signal?.removeEventListener("abort", onAbort);
+          fn(value);
+        };
+      this.outbound.set(id, { resolve: settle(resolve), reject: settle(reject) });
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
+      signal?.addEventListener("abort", onAbort, { once: true });
+      this.send({ id, method, params });
+    });
+  }
+
+  private handleClientResponse(
+    id: RpcId,
+    message: { result?: unknown; error?: RpcErrorBodyLike },
+  ): void {
+    const pending = this.outbound.get(id);
+    if (!pending) {
+      this.logger.debug({ id }, "response for unknown or abandoned host request");
+      return;
+    }
+    this.outbound.delete(id);
+    if (message.error) {
+      pending.reject(
+        new RpcError(
+          typeof message.error.code === "number" ? message.error.code : RpcErrorCode.Internal,
+          typeof message.error.message === "string" ? message.error.message : "client error",
+          message.error.data,
+        ),
+      );
+      return;
+    }
+    pending.resolve(message.result ?? null);
+  }
+
+  private rejectOutbound(error: Error): void {
+    for (const pending of this.outbound.values()) pending.reject(error);
+    this.outbound.clear();
+  }
+
+  /** Log locally and forward warn/error to the client as `host.log`. */
+  private hostLog(level: "warn" | "error", message: string, data?: Record<string, unknown>): void {
+    this.logger[level](data ?? {}, message);
+    this.send({ method: HOST_LOG_METHOD, params: { level, message, ...(data ? { data } : {}) } });
+  }
+
+  /** Catalog whose tools run in the client through `tool.call`. */
+  private proxyCatalog(specs: ToolSpec[], agentId: string | undefined): PaseoToolCatalog {
+    return createProxyToolCatalog(specs, async (tool, input, signal) => {
+      try {
+        return (await this.requestClient(
+          TOOL_CALL_METHOD,
+          { ...(agentId ? { agentId } : {}), tool, arguments: input ?? {} },
+          signal,
+        )) as PaseoToolResult;
+      } catch (error) {
+        if (!(error instanceof RpcError && error.code === RpcErrorCode.Canceled)) {
+          this.hostLog("warn", "tool.call failed", { tool, error: messageOf(error) });
+        }
+        throw error;
+      }
+    });
+  }
+
+  /** Decode the wire `launchContext`: `paseoTools` specs become a proxy catalog. */
+  private launchContext(params: Params): AgentLaunchContext | undefined {
+    return this.hydrateLaunchContext(optObj<Record<string, unknown>>(params, "launchContext"));
+  }
+
+  private hydrateLaunchContext(
+    raw: Record<string, unknown> | undefined,
+  ): AgentLaunchContext | undefined {
+    if (!raw) return undefined;
+    const { paseoTools, ...rest } = raw;
+    if (paseoTools === undefined || paseoTools === null) return rest as AgentLaunchContext;
+    if (!Array.isArray(paseoTools)) {
+      throw new RpcError(
+        RpcErrorCode.InvalidParams,
+        "params.launchContext.paseoTools must be an array",
+      );
+    }
+    const agentId = typeof rest.agentId === "string" ? rest.agentId : undefined;
+    return {
+      ...rest,
+      paseoTools: this.proxyCatalog(toolSpecs(paseoTools), agentId),
+    } as AgentLaunchContext;
   }
 
   private handleNotification(method: string, params: unknown): void {
@@ -258,6 +417,7 @@ export class ProviderHost {
       isDev,
       providerOverrides: this.init.providerOverrides,
       runtimeSettings: this.init.runtimeSettings,
+      ...(this.bridge ? { openCodeBridge: this.bridge } : {}),
     });
     const allow = this.init.providers;
     this.registry = allow
@@ -300,7 +460,10 @@ export class ProviderHost {
     try {
       await entry.session.close();
     } catch (error) {
-      this.logger.warn({ err: error, handle: entry.handle }, "session close failed");
+      this.hostLog("warn", "session close failed", {
+        handle: entry.handle,
+        error: messageOf(error),
+      });
     }
   }
 
@@ -310,7 +473,7 @@ export class ProviderHost {
     if (this.shuttingDown) {
       // closeAllSessions() already took its snapshot; release this one so it is not orphaned.
       const close = session.close().catch((error: unknown) => {
-        this.logger.warn({ err: error }, "late session close failed");
+        this.hostLog("warn", "late session close failed", { error: messageOf(error) });
       });
       this.lateCloses.add(close);
       void close.finally(() => this.lateCloses.delete(close));
@@ -377,10 +540,20 @@ export class ProviderHost {
           throw new RpcError(RpcErrorCode.InvalidRequest, "host already initialized");
         }
         this.init = { ...this.init, ...(params as InitializeParams) };
+        await this.startBridge();
         return {
           protocolVersion: PROVIDER_HOST_PROTOCOL_VERSION,
           providers: this.listProviders(),
         };
+      },
+      "host.setToolManifest": async (params) => {
+        const tools = params.tools;
+        if (!Array.isArray(tools)) {
+          throw new RpcError(RpcErrorCode.InvalidParams, "params.tools must be an array");
+        }
+        // The manifest lists the tools OpenCode registers; calls still go through tool.call.
+        this.bridge?.setManifestCatalog(this.proxyCatalog(toolSpecs(tools), undefined));
+        return { applied: this.bridge !== null };
       },
       "host.shutdown": async () => {
         await this.shutdown(false);
@@ -430,7 +603,7 @@ export class ProviderHost {
       "provider.createSession": providerCall(async (client, params, _ctx, provider) => {
         const session = await client.createSession(
           obj<AgentSessionConfig>(params, "config"),
-          optObj<AgentLaunchContext>(params, "launchContext"),
+          this.launchContext(params),
           optObj(params, "options"),
         );
         return this.register(provider, session);
@@ -439,7 +612,7 @@ export class ProviderHost {
         const session = await client.resumeSession(
           obj<AgentPersistenceHandle>(params, "persistence"),
           optObj<Partial<AgentSessionConfig>>(params, "overrides"),
-          optObj<AgentLaunchContext>(params, "launchContext"),
+          this.launchContext(params),
           optObj(params, "options"),
         );
         return this.register(provider, session);
@@ -451,9 +624,16 @@ export class ProviderHost {
             `provider ${provider} cannot import sessions`,
           );
         }
+        const context = obj<ImportProviderSessionContext>(params, "context");
+        const launchContext = this.hydrateLaunchContext(
+          context.launchContext as Record<string, unknown> | undefined,
+        );
         const imported = await client.importSession(
           obj<ImportProviderSessionInput>(params, "input"),
-          obj<ImportProviderSessionContext>(params, "context"),
+          {
+            ...context,
+            ...(launchContext ? { launchContext } : {}),
+          },
         );
         return {
           session: this.register(provider, imported.session),
@@ -573,6 +753,16 @@ export class ProviderHost {
         return null;
       }),
     };
+  }
+
+  private async startBridge(): Promise<void> {
+    const runtimeDir = this.init.runtimeDir;
+    if (!runtimeDir || this.bridge) return;
+    const allow = this.init.providers;
+    if (allow && !allow.some((id) => id === "opencode" || id.startsWith("opencode"))) return;
+    const bridge = new OpenCodeBridge({ paseoHome: runtimeDir, logger: this.logger });
+    await bridge.start();
+    this.bridge = bridge;
   }
 
   private requireRevert<T>(fn: T | undefined): T {
