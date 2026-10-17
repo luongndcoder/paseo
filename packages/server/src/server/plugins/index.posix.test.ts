@@ -62,7 +62,10 @@ function createStore(
 
 function createService(
   home: string,
-  plugins: Record<string, { source: "directory"; path: string; enabled?: boolean }> = {},
+  plugins: Record<
+    string,
+    { source: "directory"; path: string; enabled?: boolean; runtime?: "subprocess" | "in-process" }
+  > = {},
   dependencies: ConstructorParameters<typeof PluginService>[3] = {},
 ): PluginService {
   return bindTestSessionHost(
@@ -417,6 +420,38 @@ describe("PluginService", () => {
     );
     await expect(service.reloadPlugin("work-plugin")).resolves.toMatchObject({ status: "running" });
     await service.stopAllPlugins();
+  }, 20_000);
+
+  it("starts a plugin in the daemon process only when its config entry opts in", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "paseo-plugin-home-"));
+    roots.push(home);
+    const directory = await createPlugin(
+      "pid-reporter",
+      `import { z } from "zod";
+export default function contribute(plugin) {
+  plugin.handle({ name: "pid", input: z.object({}), output: z.object({ pid: z.number() }) }, () => ({ pid: process.pid }));
+  return () => undefined;
+}`,
+    );
+    const service = createService(home, {
+      "pid-reporter": { source: "directory", path: directory },
+    });
+    await service.start();
+    const subprocess = (await service.invokePluginRpc("pid-reporter", "pid", {})) as {
+      pid: number;
+    };
+    expect(subprocess.pid).not.toBe(process.pid);
+    await service.stopAllPlugins();
+
+    const optedIn = createService(home, {
+      "pid-reporter": { source: "directory", path: directory, runtime: "in-process" },
+    });
+    await optedIn.start();
+    const inProcess = (await optedIn.invokePluginRpc("pid-reporter", "pid", {})) as {
+      pid: number;
+    };
+    expect(inProcess.pid).toBe(process.pid);
+    await optedIn.stopAllPlugins();
   }, 20_000);
 
   it("lists manifest metadata for running and disabled plugins without hiding malformed entries", async () => {

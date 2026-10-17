@@ -5,11 +5,15 @@ export const PluginIdSchema = z.string().regex(/^[a-z][a-z0-9-]*$/);
 export const PluginRequirementsSchema = z.object({ paseo: z.string().optional() });
 export type PluginRequirements = z.infer<typeof PluginRequirementsSchema>;
 
+export const PluginRuntimeKindSchema = z.enum(["subprocess", "in-process"]);
+export type PluginRuntimeKind = z.infer<typeof PluginRuntimeKindSchema>;
+
 export const DirectoryPluginSourceSchema = z
   .object({
     source: z.literal("directory"),
     path: z.string().min(1),
     enabled: z.boolean().optional(),
+    runtime: PluginRuntimeKindSchema.optional(),
   })
   .strict();
 

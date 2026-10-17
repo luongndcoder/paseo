@@ -15,6 +15,7 @@ import {
   type PluginUpdatePreview,
   type PluginUpdateResult,
 } from "@getpaseo/protocol/messages";
+import type { PluginRuntimeKind } from "@getpaseo/protocol/plugin-config";
 import { parsePluginSourceReference } from "@getpaseo/protocol/plugin-source-reference";
 import { assertPluginCompatibility } from "@getpaseo/protocol/plugin-requirements";
 import { BUILTIN_PROVIDER_IDS } from "@getpaseo/protocol/provider-manifest";
@@ -52,7 +53,12 @@ interface PluginRuntimePort {
   getProviderCatalogCacheKey?: PluginRuntime["getProviderCatalogCacheKey"];
   getProviderStatus?: PluginRuntime["getProviderStatus"];
   validatePlugin?(path: string): Promise<void>;
-  startPlugin(pluginId: string, path: string, canPublish: () => boolean): Promise<void>;
+  startPlugin(
+    pluginId: string,
+    path: string,
+    canPublish: () => boolean,
+    options?: { runtime?: PluginRuntimeKind },
+  ): Promise<void>;
   startBuiltinPlugin?(plugin: BuiltinPlugin): Promise<void>;
   stopPluginById(pluginId: string): Promise<boolean>;
   stopAll(): Promise<void>;
@@ -539,7 +545,9 @@ export class PluginService {
   }
 
   private async startPlugin(pluginId: string, sourcePath: string): Promise<void> {
-    await this.runtime.startPlugin(pluginId, sourcePath, () => this.canPublish(pluginId));
+    await this.runtime.startPlugin(pluginId, sourcePath, () => this.canPublish(pluginId), {
+      runtime: this.configStore.get().plugins?.[pluginId]?.runtime,
+    });
     try {
       await this.publishProviderRegistrations(pluginId, sourcePath);
       this.publishUsageSources(pluginId);

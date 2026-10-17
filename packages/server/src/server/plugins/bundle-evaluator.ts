@@ -25,9 +25,24 @@ function runtimeRequire(name: string): unknown {
   return nodeRequire(name);
 }
 
-export function evaluateBundle(bundle: string): PluginServerContribution {
+/**
+ * `globals` rebinds free variables of the bundle (console, timers, process) for plugins that
+ * share the daemon's process; a plugin subprocess evaluates with the real ones.
+ */
+export function evaluateBundle(
+  bundle: string,
+  globals?: Readonly<Record<string, unknown>>,
+): PluginServerContribution {
   const evaluate: (source: string) => unknown = globalThis.eval;
-  const factory = evaluate(bundle);
+  let factory: unknown;
+  if (globals) {
+    const names = Object.keys(globals);
+    const scoped = evaluate(`(function(${names.join(",")}) { return (${bundle}\n); })`);
+    if (typeof scoped !== "function") throw new Error("Plugin server bundle is not executable");
+    factory = scoped(...names.map((name) => globals[name]));
+  } else {
+    factory = evaluate(bundle);
+  }
   if (typeof factory !== "function") throw new Error("Plugin server bundle is not executable");
   const exports = factory(runtimeRequire);
   const setup =
