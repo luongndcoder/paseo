@@ -36,6 +36,8 @@ import { PluginProcessMessageSchema } from "./plugin-process-protocol.js";
 import { PluginSessionSocket } from "./session-socket.js";
 import { InternalPluginChild } from "./internal-child.js";
 import { evaluateBundle } from "./bundle-evaluator.js";
+import { createInProcessSandbox } from "./in-process-sandbox.js";
+import type { PluginRuntimeKind } from "@getpaseo/protocol/plugin-config";
 
 const CLIENT_ENTRY_FILENAMES = ["index.client.ts", "index.client.tsx"] as const;
 const SERVER_ENTRY_FILENAMES = ["index.server.ts", "index.server.tsx"] as const;
@@ -328,13 +330,20 @@ export class PluginRuntime {
     pluginId: string,
     configuredPath: string,
     canPublish: () => boolean = () => true,
+    options: { runtime?: PluginRuntimeKind } = {},
   ): Promise<void> {
     if (this.plugins.has(pluginId)) throw new Error(`Plugin is already running: ${pluginId}`);
     this.appendLog(pluginId, "stdout", "[paseo] Loading plugin");
-    const loaded = await this.loadDirectoryPlugin(pluginId, configuredPath).catch((error) => {
-      this.appendLog(pluginId, "stderr", `[paseo] Plugin failed to load: ${describeError(error)}`);
-      throw error;
-    });
+    const loaded = await this.loadDirectoryPlugin(pluginId, configuredPath, options.runtime).catch(
+      (error) => {
+        this.appendLog(
+          pluginId,
+          "stderr",
+          `[paseo] Plugin failed to load: ${describeError(error)}`,
+        );
+        throw error;
+      },
+    );
     if (!canPublish()) {
       await this.stopPlugin(loaded);
       throw new Error(`Plugin start cancelled: ${pluginId}`);
@@ -631,6 +640,7 @@ export class PluginRuntime {
   private async loadDirectoryPlugin(
     pluginId: string,
     configuredPath: string,
+    runtime: PluginRuntimeKind = "subprocess",
   ): Promise<LoadedPlugin> {
     const directory = path.resolve(configuredPath);
     const manifest = await readPluginManifest(directory);
@@ -660,10 +670,30 @@ export class PluginRuntime {
       pluginId,
       pluginDirectory: directory,
       requirements: manifest.requirements,
-      child: this.spawnChild(),
-      bundle: serverBundle,
+      child: runtime === "in-process" ? this.createInProcessChild(serverBundle) : this.spawnChild(),
+      bundle: runtime === "in-process" ? "" : serverBundle,
       clientBundle: bundles.clientBundle ?? "",
     });
+  }
+
+  // Evaluates the compiled bundle in the daemon's own process behind the same child contract
+  // the subprocess satisfies, so everything downstream of the child is shared.
+  private createInProcessChild(serverBundle: string): InternalPluginChild {
+    const sandbox = createInProcessSandbox();
+    let contribute;
+    try {
+      contribute = evaluateBundle(serverBundle, sandbox.globals);
+    } catch (error) {
+      sandbox.dispose();
+      throw error;
+    }
+    const child = new InternalPluginChild(contribute, {
+      stdout: sandbox.stdout,
+      stderr: sandbox.stderr,
+      dispose: sandbox.dispose,
+    });
+    sandbox.onFatal = (error) => child.crash(error);
+    return child;
   }
 
   private async launchPlugin(input: {

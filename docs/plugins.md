@@ -2,7 +2,7 @@
 
 Local plugins contribute daemon RPCs, native app surfaces, workspace panels, Command Center items,
 client slash commands, timeline items, header buttons, composer pills, app themes, composer attachment sources, and settings screens.
-Paseo executes `index.server.ts` in a subprocess and `index.client.tsx` in every connected app.
+Paseo executes `index.server.ts` in a subprocess (or, by opt-in, in the daemon process; see [Plugin runtime](#plugin-runtime)) and `index.client.tsx` in every connected app.
 
 > **Trust every plugin you add.** `paseo plugin add` and `paseo plugin install` mean “I trust this codebase.” Plugins are unsandboxed: server code and preparation commands run with the daemon user's access on the daemon host, and client contributions run inside Paseo. The repository's dependencies and future updates are part of that trust decision. With `--host`, preparation runs on that remote daemon host.
 
@@ -120,6 +120,49 @@ environment, or enablement overrides under `agents.providers.muse`. Omit `extend
 the bundled integration; an entry with `extends` shadows it with a custom provider. See
 [provider contributions](#contribute-a-provider) for the contract and
 [Muse Code](../public-docs/muse-code.md) for setup, per-agent options, and version limitations.
+
+## Plugin runtime
+
+Each installed plugin runs in its own Node subprocess, about 165 MB of RSS each. To trade isolation
+for memory, set `runtime` on the plugin's entry under `plugins`:
+
+```json
+{
+  "plugins": {
+    "my-plugin": { "source": "directory", "path": "/abs/path", "runtime": "in-process" }
+  }
+}
+```
+
+`"subprocess"` is the default. The daemon does not reread `plugins` entries from manual edits, so
+edit `config.json` while the daemon is stopped, then start it.
+
+An in-process plugin uses the same compiled bundle, the same child contract that built-ins use
+(`internal-child.ts`), and the same runtime code after that. The app sees no difference: the
+`plugin:<id>` session, RPC namespace, settings, logs, client bundle, start/stop/reload/disable/remove
+all behave as for a subprocess. Plugin npm dependencies need nothing extra, since the compiler
+bundles them into the server bundle; only host modules and Node built-ins resolve at runtime.
+
+What the runtime does to keep the plugin out of the daemon's way (`in-process-sandbox.ts`):
+`console` and `process.stdout`/`stderr` go to the plugin log; timers are tracked and cleared on
+stop; an error thrown or rejected from a timer callback fails the plugin; `process.exit()` and
+`process.chdir()` throw. A throw during module evaluation or `contribute`, or from an RPC, hook, or
+provider handler, fails that start or call like a subprocess would. A failed in-process plugin is
+reported as `Plugin process exited: <id>` and leaves the catalog like a crashed subprocess.
+Reload evaluates the freshly compiled bundle, so module state never survives; the SDK cleanup
+function and the tracked timers are the only teardown, so release anything else (sockets,
+watchers, child processes) in the cleanup function.
+
+What it cannot do, and why you opt in per plugin:
+
+- No memory isolation or limit. A leak lives in the daemon heap.
+- A busy loop or synchronous heavy work blocks the daemon's event loop, and stop cannot kill it.
+- A rejected promise nobody awaits, or an exception from a callback that is not a tracked timer
+  (a socket or event emitter listener), reaches the daemon's process-level handlers, not the plugin.
+- Environment, credentials, and working directory are the daemon's. The shadowed globals are
+  not a sandbox; plugin code is trusted either way.
+
+Only use it for plugins you wrote or fully trust whose load is light. Built-ins are always in process.
 
 ## Install from a registry
 
