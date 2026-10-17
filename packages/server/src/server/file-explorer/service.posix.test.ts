@@ -1,10 +1,17 @@
 // POSIX-only: symlink fixtures
 /* eslint-disable max-nested-callbacks */
-import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { getDownloadableFileInfo, listDirectoryEntries, readExplorerFile } from "./service.js";
+import {
+  deleteExplorerEntry,
+  duplicateExplorerEntry,
+  getDownloadableFileInfo,
+  listDirectoryEntries,
+  readExplorerFile,
+  renameExplorerEntry,
+} from "./service.js";
 import { isPlatform } from "../../test-utils/platform.js";
 
 async function createTempDir(prefix: string): Promise<string> {
@@ -102,6 +109,33 @@ describe.skipIf(isPlatform("win32"))("service POSIX-only", () => {
       expect(info.absolutePath).toBe(await realpath(target));
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses mutations on dangling links behind an escaping symlink", async () => {
+    const root = await createTempDir("paseo-file-explorer-");
+    const outsideRoot = await createTempDir("paseo-file-explorer-outside-");
+
+    try {
+      await symlink(outsideRoot, path.join(root, "escape-link"));
+      await symlink("nowhere", path.join(outsideRoot, "missing"));
+      const relativePath = "escape-link/missing";
+
+      const renamed = await renameExplorerEntry({ root, relativePath, name: "renamed" });
+      const duplicated = await duplicateExplorerEntry({ root, relativePath });
+      const deleted = await deleteExplorerEntry({ root, relativePath });
+
+      for (const result of [renamed, duplicated, deleted]) {
+        expect(result).toEqual({
+          status: "error",
+          error: "Access outside of workspace is not allowed",
+        });
+      }
+      expect(await readdir(outsideRoot)).toEqual(["missing"]);
+      expect((await lstat(path.join(outsideRoot, "missing"))).isSymbolicLink()).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(outsideRoot, { recursive: true, force: true });
     }
   });
 });
