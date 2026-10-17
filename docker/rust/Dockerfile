@@ -9,6 +9,9 @@
 #   docker buildx build -f docker/rust/Dockerfile \
 #     --build-context paseo-rs=/path/to/paseo-rs \
 #     --platform linux/amd64,linux/arm64 -t paseo:rust-preview .
+#
+# Use a clean snapshot of paseo-rs (no target/ or .git): the whole context
+# directory is sent to the builder. See DEPLOY.md.
 
 ARG NODE_IMAGE=node:22-bookworm-slim
 ARG RUST_IMAGE=rust:1-bookworm
@@ -16,8 +19,7 @@ ARG RUST_IMAGE=rust:1-bookworm
 FROM ${RUST_IMAGE} AS rust-builder
 ARG TARGETARCH
 ENV CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/cargo-target
-# The 30 GB target/ directory of a dev checkout stays out of the build: the
-# source is bind-mounted read-only and only the files cargo opens are synced.
+# The source is bind-mounted read-only so it does not land in an image layer.
 RUN --mount=type=bind,from=paseo-rs,target=/src \
     --mount=type=cache,target=/usr/local/cargo/registry,id=paseo-cargo-registry-${TARGETARCH} \
     --mount=type=cache,target=/cargo-target,id=paseo-cargo-target-${TARGETARCH} \
