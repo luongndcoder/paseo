@@ -51,12 +51,15 @@ describe("client activity tracking", () => {
     await daemon.close();
   }, 30000);
 
+  // Events are opt-in per client. `notifications: true` lets the daemon's shouldNotify
+  // decision (the logic under test) reach this client instead of being forced to false.
   async function createClient(): Promise<DaemonClient> {
     const client = new DaemonClient({
       url: `ws://127.0.0.1:${daemon.port}/ws`,
       messageQueueLimit: null,
     });
     await client.connect();
+    await client.observeEvents(["agent_attention_required"], { notifications: true }).ready;
     return client;
   }
 
