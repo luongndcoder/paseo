@@ -3,9 +3,11 @@ import pino from "pino";
 import {
   AgentConfigSession,
   type AgentConfigOperations,
+  type AgentCommandSource,
   type AgentConfigSessionHost,
+  type ListCommandsDraftConfig,
 } from "./agent-config-session.js";
-import type { AgentProviderNotice } from "../../agent/agent-sdk-types.js";
+import type { AgentProviderNotice, AgentSlashCommand } from "../../agent/agent-sdk-types.js";
 import type { SessionOutboundMessage } from "../../messages.js";
 
 class FakeAgentConfigOperations implements AgentConfigOperations {
@@ -20,6 +22,19 @@ class FakeAgentConfigOperations implements AgentConfigOperations {
   thinkingNotice: AgentProviderNotice | null = null;
   loadFailure: Error | null = null;
   failWith: Error | null = null;
+  commandSource: AgentCommandSource = { found: false };
+  draftCommands: AgentSlashCommand[] = [];
+  readonly draftCalls: ListCommandsDraftConfig[] = [];
+
+  async resolveCommandSource(): Promise<AgentCommandSource> {
+    return this.commandSource;
+  }
+
+  async listDraftCommands(draftConfig: ListCommandsDraftConfig): Promise<AgentSlashCommand[]> {
+    this.draftCalls.push(draftConfig);
+    if (this.failWith) throw this.failWith;
+    return this.draftCommands;
+  }
 
   async ensureLoaded(agentId: string): Promise<void> {
     this.loadedAgentIds.push(agentId);
@@ -426,5 +441,64 @@ describe("AgentConfigSession", () => {
       type: "agent.config.apply.response",
       payload: { requestId: "req-1", agentId: "agent-1", accepted: false, error: "apply boom" },
     });
+  });
+
+  const command = { name: "go", description: "Go", argumentHint: "" };
+
+  test("list commands: lists from a live agent session", async () => {
+    const { subsystem, emitted, operations } = makeSubsystem();
+    operations.commandSource = { found: true, listCommands: async () => [command] };
+
+    await subsystem.handleListCommandsRequest({
+      type: "list_commands_request",
+      agentId: "agent-1",
+      requestId: "req-1",
+    });
+
+    expect(emitted).toEqual([
+      {
+        type: "list_commands_response",
+        payload: { agentId: "agent-1", commands: [command], error: null, requestId: "req-1" },
+      },
+    ]);
+  });
+
+  test("list commands: falls back to the draft config when the agent is missing", async () => {
+    const { subsystem, emitted, operations } = makeSubsystem();
+    operations.draftCommands = [command];
+
+    await subsystem.handleListCommandsRequest({
+      type: "list_commands_request",
+      agentId: "agent-1",
+      requestId: "req-1",
+      draftConfig: { provider: "claude", cwd: "/tmp" },
+    } as never);
+
+    expect(operations.draftCalls).toHaveLength(1);
+    expect(emitted[0]).toMatchObject({
+      payload: { commands: [command], error: null },
+    });
+  });
+
+  test("list commands: reports not-found, unsupported, and failures", async () => {
+    const { subsystem, emitted, operations } = makeSubsystem();
+    const msg = { type: "list_commands_request", agentId: "agent-1", requestId: "req-1" } as const;
+
+    await subsystem.handleListCommandsRequest(msg);
+    operations.commandSource = { found: true };
+    await subsystem.handleListCommandsRequest(msg);
+    operations.commandSource = {
+      found: true,
+      listCommands: async () => {
+        throw new Error("list boom");
+      },
+    };
+    await subsystem.handleListCommandsRequest(msg);
+
+    expect(emitted.map((m) => (m as { payload: { error: string | null } }).payload.error)).toEqual([
+      "Agent not found: agent-1",
+      "Agent does not support listing commands",
+      "list boom",
+    ]);
   });
 });

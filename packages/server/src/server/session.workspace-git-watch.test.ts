@@ -9,7 +9,8 @@ import { createBranchChangeRouteHandler } from "./script-route-branch-handler.js
 import { createServiceProxySubsystem, type ServiceProxySubsystem } from "./service-proxy.js";
 import { Session, type SessionOptions } from "./session.js";
 import { OWNER_PERMISSIONS } from "./authorization/index.js";
-import { asInternals, createStub } from "./test-utils/class-mocks.js";
+import { createStub } from "./test-utils/class-mocks.js";
+import { asSessionInternals } from "./test-utils/session-stubs.js";
 import { createProviderSnapshotManagerStub } from "./test-utils/session-stubs.js";
 import { createTestLogger } from "../test-utils/test-logger.js";
 import { WorkspaceScriptRuntimeStore } from "./workspace-script-runtime-store.js";
@@ -36,7 +37,7 @@ interface SessionInternals {
 // integration tests drive it with a minimal git descriptor for one workspace, then push
 // snapshots through the captured WorkspaceGitService listener.
 function syncGitObserver(session: Session, cwd: string, workspaceId: string): void {
-  asInternals<SessionInternals>(session).workspaceGitObserver.syncObservers([
+  asSessionInternals<SessionInternals>(session).workspaceGitObserver.syncObservers([
     {
       id: workspaceId,
       workspaceDirectory: cwd,
@@ -271,7 +272,7 @@ function createSessionForWorkspaceGitWatchTests(options?: {
     getDaemonTcpPort: () => 6767,
   });
 
-  asInternals<SessionInternals>(session).listAgentPayloads = async () => [];
+  asSessionInternals<SessionInternals>(session).listAgentPayloads = async () => [];
 
   return {
     session,
@@ -320,7 +321,7 @@ describe("workspace git watch targets", () => {
   test("emits one workspace_update when the workspace git service emits a changed snapshot", async () => {
     const { session, emitted, projects, workspaces, workspaceGitService, subscriptions } =
       createSessionForWorkspaceGitWatchTests();
-    const sessionAny = asInternals<SessionInternals>(session);
+    const sessionAny = asSessionInternals<SessionInternals>(session);
     seedGitWorkspace({
       projects,
       workspaces,
@@ -533,7 +534,7 @@ describe("workspace git watch targets", () => {
       name: "main",
     });
 
-    await asInternals<{ archiveWorkspaceRecord: (workspaceId: string) => Promise<void> }>(
+    await asSessionInternals<{ archiveWorkspaceRecord: (workspaceId: string) => Promise<void> }>(
       session,
     ).archiveWorkspaceRecord("ws-10");
 
@@ -545,7 +546,7 @@ describe("workspace git watch targets", () => {
   test("archiving a workspace releases its git watch subscription for the directory", async () => {
     const { session, projects, workspaces, subscriptions } =
       createSessionForWorkspaceGitWatchTests();
-    const sessionAny = asInternals<
+    const sessionAny = asSessionInternals<
       SessionInternals & { archiveWorkspaceRecord: (workspaceId: string) => Promise<void> }
     >(session);
     seedGitWorkspace({
