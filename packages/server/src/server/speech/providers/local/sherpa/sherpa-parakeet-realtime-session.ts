@@ -25,6 +25,7 @@ export class SherpaParakeetRealtimeTranscriptionSession
   private lastDecodeAt = 0;
   private decoding = false;
   private pendingDecode = false;
+  private inFlightDecode: Promise<void> | null = null;
   private readonly minDecodeIntervalMs: number;
 
   constructor(params: { engine: SherpaOfflineRecognizerEngine; minDecodeIntervalMs?: number }) {
@@ -62,20 +63,24 @@ export class SherpaParakeetRealtimeTranscriptionSession
       return;
     }
 
+    // Snapshot and reset now; audio appended while we wait belongs to the next segment.
+    const segmentId = this.currentSegmentId;
+    const previousSegmentId = this.previousSegmentId;
+    const snapshot = this.pcm16;
+    this.previousSegmentId = segmentId;
+    this.currentSegmentId = uuidv4();
+    this.lastPartialText = "";
+    this.pcm16 = Buffer.alloc(0);
+    this.emit("committed", { segmentId, previousSegmentId });
+
     void (async () => {
       try {
-        await this.maybeDecode(true);
-        const finalText = this.lastPartialText;
-        const segmentId = this.currentSegmentId!;
-        const previousSegmentId = this.previousSegmentId;
-
-        this.emit("committed", { segmentId, previousSegmentId });
+        // Let any in-flight partial decode finish, then decode the snapshot itself.
+        while (this.inFlightDecode) {
+          await this.inFlightDecode;
+        }
+        const finalText = await this.decodeNow(snapshot, previousSegmentId === null);
         this.emit("transcript", { segmentId, transcript: finalText, isFinal: true });
-
-        this.previousSegmentId = segmentId;
-        this.currentSegmentId = uuidv4();
-        this.lastPartialText = "";
-        this.pcm16 = Buffer.alloc(0);
       } catch (err) {
         this.emit("error", err instanceof Error ? err : new Error(String(err)));
       }
@@ -113,19 +118,23 @@ export class SherpaParakeetRealtimeTranscriptionSession
     }
 
     this.decoding = true;
+    const segmentId = this.currentSegmentId;
+    const decode = this.decodeNow(this.pcm16, this.previousSegmentId === null);
+    this.inFlightDecode = decode.then(
+      () => undefined,
+      () => undefined,
+    );
     try {
-      const text = await this.decodeNow();
+      const text = await decode;
       this.lastDecodeAt = Date.now();
-      if (text !== this.lastPartialText) {
+      // A commit or clear while decoding moves on to a new segment; drop the stale partial.
+      if (segmentId === this.currentSegmentId && text !== this.lastPartialText) {
         this.lastPartialText = text;
-        this.emit("transcript", {
-          segmentId: this.currentSegmentId,
-          transcript: text,
-          isFinal: false,
-        });
+        this.emit("transcript", { segmentId, transcript: text, isFinal: false });
       }
     } finally {
       this.decoding = false;
+      this.inFlightDecode = null;
       if (this.pendingDecode) {
         this.pendingDecode = false;
         await this.maybeDecode(true);
@@ -133,12 +142,12 @@ export class SherpaParakeetRealtimeTranscriptionSession
     }
   }
 
-  private async decodeNow(): Promise<string> {
-    if (this.pcm16.length === 0) {
+  private async decodeNow(pcm16: Buffer, capitalize: boolean): Promise<string> {
+    if (pcm16.length === 0) {
       return "";
     }
 
-    const peak = pcm16lePeakAbs(this.pcm16);
+    const peak = pcm16lePeakAbs(pcm16);
     const peakFloat = peak / 32768.0;
     const targetPeak = 0.6;
     const maxGain = 50;
@@ -147,7 +156,7 @@ export class SherpaParakeetRealtimeTranscriptionSession
 
     const stream = this.engine.createStream();
     try {
-      const floatSamples = pcm16leToFloat32(this.pcm16, gain);
+      const floatSamples = pcm16leToFloat32(pcm16, gain);
       this.engine.acceptWaveform(stream, this.engine.sampleRate, floatSamples);
       this.engine.recognizer.decode(stream);
       const result = this.engine.recognizer.getResult(stream);
@@ -159,7 +168,7 @@ export class SherpaParakeetRealtimeTranscriptionSession
         ).trim(),
       );
       // Later segments continue the same dictation, so only the first one starts a sentence.
-      return this.previousSegmentId === null ? capitalizeFirstLetter(text) : text;
+      return capitalize ? capitalizeFirstLetter(text) : text;
     } finally {
       try {
         stream.free?.();

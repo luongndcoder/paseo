@@ -156,7 +156,7 @@ export async function ensureSherpaOnnxModel(
   });
 
   if (options.modelId === NEMOTRON_MODEL_ID) {
-    const files = await ensureVietnameseSherpaModel(options.modelsDir, logger);
+    const files = await ensureVietnameseSherpaModel(options.modelsDir, logger, options.signal);
     return files.modelDir;
   }
 

@@ -124,11 +124,17 @@ export class OpenAISTT implements SpeechToTextProvider {
 
         const committedId = segmentId;
         const prev = previousSegmentId;
+        // Snapshot and reset now so audio appended during the in-flight request
+        // belongs to the next segment.
+        const snapshot = pcm16;
+        previousSegmentId = committedId;
+        segmentId = v4();
+        pcm16 = Buffer.alloc(0);
         emitter.emit("committed", { segmentId: committedId, previousSegmentId: prev });
 
         void (async () => {
           try {
-            if (pcm16.length === 0) {
+            if (snapshot.length === 0) {
               emitter.emit("transcript", {
                 segmentId: committedId,
                 transcript: "",
@@ -139,7 +145,7 @@ export class OpenAISTT implements SpeechToTextProvider {
               return;
             }
 
-            const wav = convertPCMToWavBuffer(pcm16);
+            const wav = convertPCMToWavBuffer(snapshot);
             const result = await transcribeAudio(
               wav,
               "audio/wav",
@@ -159,10 +165,6 @@ export class OpenAISTT implements SpeechToTextProvider {
             });
           } catch (err) {
             emitter.emit("error", err);
-          } finally {
-            previousSegmentId = committedId;
-            segmentId = v4();
-            pcm16 = Buffer.alloc(0);
           }
         })();
       },

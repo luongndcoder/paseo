@@ -22,10 +22,15 @@ const DICTATION_FINAL_TIMEOUT_MAX_MS = 5 * 60 * 1000;
 const DICTATION_FINAL_TIMEOUT_PER_PENDING_SEGMENT_MS = 15 * 1000;
 const DICTATION_FINAL_TIMEOUT_PER_PENDING_AUDIO_SECOND_MS = 1500;
 const DICTATION_FINAL_TIMEOUT_PER_MISSING_SEQ_MS = 250;
-const DICTATION_SILENCE_PEAK_THRESHOLD = Number.parseInt(
-  process.env.PASEO_DICTATION_SILENCE_PEAK_THRESHOLD ?? "300",
-  10,
+const DEFAULT_DICTATION_SILENCE_PEAK_THRESHOLD = 300;
+const DICTATION_SILENCE_PEAK_THRESHOLD = parseSilencePeakThreshold(
+  process.env.PASEO_DICTATION_SILENCE_PEAK_THRESHOLD,
 );
+
+function parseSilencePeakThreshold(value: string | undefined): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) ? parsed : DEFAULT_DICTATION_SILENCE_PEAK_THRESHOLD;
+}
 
 function parseNonNegativeNumber(value: string | undefined): number | null {
   if (value === undefined) {
