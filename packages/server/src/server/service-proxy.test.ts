@@ -344,7 +344,10 @@ interface ForwardedFixture {
  * echoes the headers it received so tests can assert what actually crossed the
  * proxy, not what a helper returned.
  */
-async function startForwardedHeadersFixture(upstreamHost = "127.0.0.1"): Promise<ForwardedFixture> {
+async function startForwardedHeadersFixture(
+  upstreamHost = "127.0.0.1",
+  edgeBackend?: { token: string; publicListen: string | null },
+): Promise<ForwardedFixture> {
   const upstream = http.createServer((req, res) => {
     let body = "";
     req.on("data", (chunk: Buffer) => {
@@ -373,7 +376,7 @@ async function startForwardedHeadersFixture(upstreamHost = "127.0.0.1"): Promise
   });
   const upstreamPort = (upstream.address() as net.AddressInfo).port;
 
-  const serviceProxy = createServiceProxySubsystem({ logger });
+  const serviceProxy = createServiceProxySubsystem({ logger, edgeBackend });
   const route = serviceProxy.registerWorkspaceService({
     workspaceId: "workspace-a",
     projectSlug: "repo",
@@ -511,6 +514,49 @@ describe("service proxy loopback services", () => {
 });
 
 describe("service proxy forwarded headers", () => {
+  it("never hands edge identity headers to a service and uses the edge-forwarded client address", async () => {
+    const fixture = await startForwardedHeadersFixture("127.0.0.1", {
+      token: "edge-secret",
+      publicListen: null,
+    });
+    try {
+      const edgeHeaders = {
+        "x-paseo-edge-token": "edge-secret",
+        "x-paseo-edge-transport": "direct",
+        "x-paseo-edge-remote-addr": "203.0.113.9:4444",
+      };
+      const response = await httpGet(
+        fixture.daemonPort,
+        `${fixture.hostname}:${fixture.daemonPort}`,
+        { path: "/", headers: edgeHeaders },
+      );
+      const headers = JSON.parse(response.body) as Record<string, string | undefined>;
+      expect(Object.keys(headers).filter((key) => key.startsWith("x-paseo-edge-"))).toEqual([]);
+      expect(headers["x-forwarded-for"]).toBe("203.0.113.9");
+
+      const forged = await httpGet(
+        fixture.daemonPort,
+        `${fixture.hostname}:${fixture.daemonPort}`,
+        {
+          path: "/",
+          headers: { ...edgeHeaders, "x-paseo-edge-token": "wrong" },
+        },
+      );
+      const forgedHeaders = JSON.parse(forged.body) as Record<string, string | undefined>;
+      expect(forgedHeaders["x-forwarded-for"]).toBe("127.0.0.1");
+
+      const upgraded = await upgradeThroughProxy(
+        fixture.daemonPort,
+        `${fixture.hostname}:${fixture.daemonPort}`,
+        edgeHeaders,
+      );
+      expect(Object.keys(upgraded).filter((key) => key.startsWith("x-paseo-edge-"))).toEqual([]);
+      expect(upgraded["x-forwarded-for"]).toBe("203.0.113.9");
+    } finally {
+      await fixture.close();
+    }
+  });
+
   it("forwards the client authority with its port so services build reachable URLs", async () => {
     const fixture = await startForwardedHeadersFixture();
     try {

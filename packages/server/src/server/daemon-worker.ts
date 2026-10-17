@@ -6,6 +6,14 @@ import { resolvePaseoHome } from "./paseo-home.js";
 import { createRootLogger } from "./logger.js";
 import type { DaemonLifecycleIntent } from "./bootstrap.js";
 import { getProcessDiagnostics } from "./process-diagnostics.js";
+import {
+  formatEdgeLifecycleLine,
+  readEdgeBackendConfig,
+  resolveEdgeBackendConfigPatch,
+  scrubEdgeEnv,
+  watchEdgeParent,
+  type EdgeBackendConfig,
+} from "./edge-backend.js";
 
 process.title = "Paseo Daemon";
 
@@ -80,6 +88,21 @@ function bootstrapFromEnvironment(): BootstrapResult {
   }
 }
 
+// Behind the Rust edge the worker binds only the internal loopback port and the edge owns
+// relay (bootstrap never starts the worker's relay transport in edge mode). The relay config
+// stays as resolved so pairing and status report the relay the edge actually runs.
+function applyEdgeBackendOverrides(
+  config: ReturnType<typeof loadConfig>,
+  edge: EdgeBackendConfig,
+): void {
+  const patch = resolveEdgeBackendConfigPatch({
+    env: process.env,
+    edge,
+    corsAllowedOrigins: config.corsAllowedOrigins,
+  });
+  Object.assign(config, patch);
+}
+
 function applyCliFlagOverrides(config: ReturnType<typeof loadConfig>): void {
   const configReload = config.configReload;
   if (!configReload) throw new Error("Loaded daemon config is missing reload metadata");
@@ -135,6 +158,12 @@ async function main() {
   let exitHookInstalled = false;
 
   applyCliFlagOverrides(config);
+  const edgeBackend = readEdgeBackendConfig(process.env);
+  if (edgeBackend) {
+    // Read once, then drop: the token must not reach agents, terminals or nested daemons.
+    scrubEdgeEnv(process.env);
+    applyEdgeBackendOverrides(config, edgeBackend);
+  }
 
   const installExitHook = () => {
     if (exitHookInstalled || !shutdownPromise) {
@@ -196,6 +225,11 @@ async function main() {
   };
 
   const sendSupervisorLifecycleMessage = (message: SupervisorLifecycleMessage): boolean => {
+    if (edgeBackend) {
+      // No Node IPC behind the edge: lifecycle events are JSONL on stdout.
+      process.stdout.write(formatEdgeLifecycleLine(message));
+      return true;
+    }
     if (typeof process.send !== "function") {
       return false;
     }
@@ -306,7 +340,25 @@ async function main() {
     timer.unref();
   };
 
-  installSupervisorLivenessGuard();
+  const installEdgeLivenessGuard = () => {
+    watchEdgeParent({
+      stdin: process.stdin,
+      onParentLost: () => {
+        writeWorkerLifecycleLog(paseoHome, "Edge liveness lost; worker exiting", {
+          ...getProcessDiagnostics(),
+        });
+        // Same hard boundary as supervisor loss: the edge owned our output pipes.
+        process.exit(0);
+      },
+      onGracefulShutdown: (reason) => beginShutdown("Edge shutdown request", { reason }),
+    });
+  };
+
+  if (edgeBackend) {
+    installEdgeLivenessGuard();
+  } else {
+    installSupervisorLivenessGuard();
+  }
 
   try {
     daemon = await createPaseoDaemon(

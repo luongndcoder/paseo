@@ -5,6 +5,7 @@ import {
   type RotatingFileStream,
 } from "rotating-file-stream";
 import { signalProcessTree } from "../src/utils/tree-kill.js";
+import { createLineSplitter, parseEdgeLifecycleLine } from "../src/server/edge-backend.js";
 
 const WORKER_HEARTBEAT_INTERVAL_MS = 1_000;
 const WORKER_TERMINATION_GRACE_MS = 10_000;
@@ -41,6 +42,15 @@ interface SupervisorGracefulShutdownMessage {
   reason: string;
 }
 
+interface WorkerSpawnSpec {
+  command: string;
+  args: string[];
+  env?: NodeJS.ProcessEnv;
+  // "ipc" (default): Node IPC channel. "jsonl": no IPC; the child owns stdin as a
+  // liveness pipe and reports lifecycle events as `@@paseo {json}` stdout lines (paseod).
+  transport?: "ipc" | "jsonl";
+}
+
 interface SupervisorOptions {
   name: string;
   startupMessage: string;
@@ -48,11 +58,7 @@ interface SupervisorOptions {
   workerArgs?: string[];
   workerEnv?: NodeJS.ProcessEnv;
   workerExecArgv?: string[];
-  resolveWorkerSpawnSpec?: (workerEntry: string) => {
-    command: string;
-    args: string[];
-    env?: NodeJS.ProcessEnv;
-  } | null;
+  resolveWorkerSpawnSpec?: (workerEntry: string) => WorkerSpawnSpec | null;
   onWorkerReady?: (message: { listen: string; serverId: string }) => Promise<void> | void;
   onWorkerExit?: () => Promise<void> | void;
   restartOnCrash?: boolean;
@@ -183,6 +189,7 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
   const resolveWorkerSpawnSpec = options.resolveWorkerSpawnSpec;
 
   let child: ChildProcess | null = null;
+  const jsonlChildren = new WeakSet<ChildProcess>();
   let restarting = false;
   let shuttingDown = false;
   let exiting = false;
@@ -270,6 +277,47 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
     forceKillTimer.unref();
   };
 
+  const handleLifecycleMessage = (
+    source: ChildProcess,
+    msg: unknown,
+    markReady: () => void,
+  ): void => {
+    const lifecycleMessage = parseLifecycleMessage(msg);
+    if (!lifecycleMessage || child !== source) {
+      return;
+    }
+
+    if (lifecycleMessage.type === "paseo:ready") {
+      markReady();
+      writeLifecycleLog("Worker ready", { listen: lifecycleMessage.listen });
+      publication = publication
+        .then(() =>
+          options.onWorkerReady?.({
+            listen: lifecycleMessage.listen,
+            serverId: lifecycleMessage.serverId,
+          }),
+        )
+        .catch((error) => {
+          lifecycleFailed = true;
+          const message = error instanceof Error ? error.message : String(error);
+          log(`Worker ready callback failed: ${message}`);
+          requestShutdown("endpoint_publication_failed");
+        });
+      return;
+    }
+
+    if (lifecycleMessage.type === "paseo:shutdown") {
+      const reason = lifecycleMessage.reason ?? "worker_requested_shutdown";
+      writeLifecycleLog("Worker requested shutdown", { reason });
+      requestShutdown(reason);
+      return;
+    }
+
+    const reason = lifecycleMessage.reason ?? "worker_requested_restart";
+    writeLifecycleLog("Worker requested restart", { reason });
+    requestRestart(reason);
+  };
+
   const spawnWorker = () => {
     let workerEntry: string;
     try {
@@ -284,9 +332,10 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
 
     const spawnSpec = resolveWorkerSpawnSpec?.(workerEntry) ?? null;
     writeLifecycleLog("Spawning worker", { workerEntry });
+    const jsonlTransport = spawnSpec?.transport === "jsonl";
     if (spawnSpec) {
       child = spawn(spawnSpec.command, spawnSpec.args, {
-        stdio: ["inherit", "pipe", "pipe", "ipc"],
+        stdio: jsonlTransport ? ["pipe", "pipe", "pipe"] : ["inherit", "pipe", "pipe", "ipc"],
         env: spawnSpec.env ?? workerEnv,
       });
     } else {
@@ -298,9 +347,15 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
     }
 
     const currentChild = child;
+    if (jsonlTransport) {
+      jsonlChildren.add(currentChild);
+    }
     let reachedReady = false;
     // Serialize endpoint writes with exit/clear before allowing another worker to spawn.
     const heartbeat = setInterval(() => {
+      if (jsonlTransport) {
+        return;
+      }
       const message: SupervisorHeartbeatMessage = { type: "paseo:supervisor-heartbeat" };
       if (currentChild.connected) {
         currentChild.send?.(message, (error) => {
@@ -320,10 +375,29 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
       writeLifecycleLog("Worker IPC channel disconnected");
     });
 
-    child.stdout?.on("data", (chunk: Buffer) => {
-      process.stdout.write(chunk);
-      writeDurableChunk(chunk);
-    });
+    if (jsonlTransport) {
+      // Lifecycle lines are protocol, not log output: consume them, pass the rest through.
+      const splitter = createLineSplitter((line) => {
+        const message = parseEdgeLifecycleLine(line);
+        if (message !== null) {
+          handleLifecycleMessage(currentChild, message, () => {
+            reachedReady = true;
+          });
+          return;
+        }
+        process.stdout.write(`${line}\n`);
+        writeDurableChunk(`${line}\n`);
+      });
+      child.stdout?.on("data", (chunk: Buffer) => splitter.push(chunk));
+      child.stdout?.on("end", () => splitter.flush());
+      // An EPIPE on the liveness pipe means the child is already gone; exit handling follows.
+      child.stdin?.on("error", () => undefined);
+    } else {
+      child.stdout?.on("data", (chunk: Buffer) => {
+        process.stdout.write(chunk);
+        writeDurableChunk(chunk);
+      });
+    }
 
     child.stderr?.on("data", (chunk: Buffer) => {
       process.stderr.write(chunk);
@@ -331,40 +405,9 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
     });
 
     child.on("message", (msg: unknown) => {
-      const lifecycleMessage = parseLifecycleMessage(msg);
-      if (!lifecycleMessage || child !== currentChild) {
-        return;
-      }
-
-      if (lifecycleMessage.type === "paseo:ready") {
+      handleLifecycleMessage(currentChild, msg, () => {
         reachedReady = true;
-        writeLifecycleLog("Worker ready", { listen: lifecycleMessage.listen });
-        publication = publication
-          .then(() =>
-            options.onWorkerReady?.({
-              listen: lifecycleMessage.listen,
-              serverId: lifecycleMessage.serverId,
-            }),
-          )
-          .catch((error) => {
-            lifecycleFailed = true;
-            const message = error instanceof Error ? error.message : String(error);
-            log(`Worker ready callback failed: ${message}`);
-            requestShutdown("endpoint_publication_failed");
-          });
-        return;
-      }
-
-      if (lifecycleMessage.type === "paseo:shutdown") {
-        const reason = lifecycleMessage.reason ?? "worker_requested_shutdown";
-        writeLifecycleLog("Worker requested shutdown", { reason });
-        requestShutdown(reason);
-        return;
-      }
-
-      const reason = lifecycleMessage.reason ?? "worker_requested_restart";
-      writeLifecycleLog("Worker requested restart", { reason });
-      requestRestart(reason);
+      });
     });
 
     child.on("error", (error) => {
@@ -421,6 +464,18 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
     });
   };
 
+  // SIGTERM on Unix; Windows has no catchable SIGTERM, so ask over the stdin pipe.
+  const requestJsonlChildShutdown = (
+    currentChild: ChildProcess,
+    message: SupervisorGracefulShutdownMessage,
+  ): void => {
+    if (process.platform === "win32") {
+      currentChild.stdin?.write(`${JSON.stringify(message)}\n`);
+      return;
+    }
+    currentChild.kill("SIGTERM");
+  };
+
   const requestWorkerShutdown = (reason: string): void => {
     if (!child) {
       return;
@@ -435,6 +490,10 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
       supervisorPid: process.pid,
       workerPid: currentChild.pid ?? null,
     });
+    if (jsonlChildren.has(currentChild)) {
+      requestJsonlChildShutdown(currentChild, message);
+      return;
+    }
     if (!currentChild.connected) {
       writeLifecycleLog("Graceful worker shutdown IPC unavailable", {
         reason,

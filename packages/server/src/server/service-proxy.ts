@@ -6,6 +6,7 @@ import { existsSync, unlinkSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import express, { type RequestHandler } from "express";
 import type { Logger } from "pino";
+import { resolveEdgeConnectionIdentity, type EdgeBackendConfig } from "./edge-backend.js";
 
 export type ServiceProxyListenTarget =
   | { type: "tcp"; host: string; port: number }
@@ -275,14 +276,25 @@ function buildForwardedHeaders({
   req,
   route,
   protocol,
+  edge,
 }: {
   req: IncomingMessage;
   route: ServiceProxyRoute;
   protocol: string;
+  edge: EdgeBackendConfig | null;
 }): Record<string, string | string[]> {
   const hostHeader = String(req.headers.host ?? route.hostname);
   const forwardedHeaders = stripHopByHopHeaders(req.headers);
-  forwardedHeaders["x-forwarded-for"] = req.socket.remoteAddress ?? "127.0.0.1";
+  // The edge token is a daemon secret; user services must never see it.
+  for (const key of Object.keys(forwardedHeaders)) {
+    if (key.toLowerCase().startsWith("x-paseo-edge-")) {
+      delete forwardedHeaders[key];
+    }
+  }
+  // Behind the edge the socket peer is always the edge on loopback.
+  const edgeIdentity = resolveEdgeConnectionIdentity(req.headers, edge);
+  forwardedHeaders["x-forwarded-for"] =
+    edgeIdentity?.remoteAddress ?? req.socket.remoteAddress ?? "127.0.0.1";
   // Forward the authority verbatim, port included. Services derive their public
   // origin from this header, so a stripped port makes them emit absolute URLs
   // (redirects, links) pointing at port 80. Route lookup already normalized the
@@ -321,13 +333,15 @@ function proxyHttpRequest({
   res,
   route,
   logger,
+  edge,
 }: {
   req: Parameters<RequestHandler>[0];
   res: Parameters<RequestHandler>[1];
   route: ServiceProxyRoute;
   logger: Logger;
+  edge: EdgeBackendConfig | null;
 }): void {
-  const forwardedHeaders = buildForwardedHeaders({ req, route, protocol: req.protocol });
+  const forwardedHeaders = buildForwardedHeaders({ req, route, protocol: req.protocol, edge });
 
   const proxyReq = requestLocalService(
     {
@@ -361,16 +375,18 @@ function proxyUpgradeRequest({
   head,
   route,
   logger,
+  edge,
 }: {
   req: IncomingMessage;
   socket: net.Socket;
   head: Buffer;
   route: ServiceProxyRoute;
   logger: Logger;
+  edge: EdgeBackendConfig | null;
 }): void {
   const targetSocket = connectToLocalService(route.port);
   targetSocket.on("connect", () => {
-    const forwardedHeaders = buildForwardedHeaders({ req, route, protocol: "http" });
+    const forwardedHeaders = buildForwardedHeaders({ req, route, protocol: "http", edge });
     forwardedHeaders.connection = "Upgrade";
     forwardedHeaders.upgrade = req.headers.upgrade ?? "websocket";
 
@@ -758,9 +774,11 @@ export type ScriptRouteEntry = ServiceProxyRouteEntry;
 export function createScriptProxyMiddleware({
   routeStore,
   logger,
+  edgeBackend = null,
 }: {
   routeStore: ServiceProxyRouteRegistry;
   logger: Logger;
+  edgeBackend?: EdgeBackendConfig | null;
 }): RequestHandler {
   return (req, res, next) => {
     const classification = routeStore.classifyHost(req.headers.host);
@@ -772,7 +790,7 @@ export function createScriptProxyMiddleware({
       res.status(404).send("404 Not Found");
       return;
     }
-    proxyHttpRequest({ req, res, route: classification.route, logger });
+    proxyHttpRequest({ req, res, route: classification.route, logger, edge: edgeBackend });
   };
 }
 
@@ -780,10 +798,12 @@ export function createScriptProxyUpgradeHandler({
   routeStore,
   logger,
   passthroughUnknown = true,
+  edgeBackend = null,
 }: {
   routeStore: ServiceProxyRouteRegistry;
   logger: Logger;
   passthroughUnknown?: boolean;
+  edgeBackend?: EdgeBackendConfig | null;
 }): (req: IncomingMessage, socket: net.Socket, head: Buffer) => void {
   return (req, socket, head) => {
     const classification = routeStore.classifyHost(req.headers.host);
@@ -793,7 +813,14 @@ export function createScriptProxyUpgradeHandler({
       }
       return;
     }
-    proxyUpgradeRequest({ req, socket, head, route: classification.route, logger });
+    proxyUpgradeRequest({
+      req,
+      socket,
+      head,
+      route: classification.route,
+      logger,
+      edge: edgeBackend,
+    });
   };
 }
 
@@ -827,6 +854,7 @@ export interface ServiceProxySubsystem {
     daemonPort: number | null | undefined;
     publicBaseUrl?: string | null;
   }): ServiceProxyWorkspaceScriptProjection;
+  isRegisteredServiceHost(host: string | undefined): boolean;
   middleware(): RequestHandler;
   upgradeHandler(options: {
     passthroughUnknown: boolean;
@@ -840,11 +868,13 @@ export interface ServiceProxySubsystem {
 export function createServiceProxySubsystem({
   logger,
   publicBaseUrl,
+  edgeBackend,
 }: {
   logger: Logger;
   publicBaseUrl?: string | null;
+  edgeBackend?: EdgeBackendConfig | null;
 }): ServiceProxySubsystem {
-  return new NodeServiceProxySubsystem(logger, publicBaseUrl ?? null);
+  return new NodeServiceProxySubsystem(logger, publicBaseUrl ?? null, edgeBackend ?? null);
 }
 
 class NodeServiceProxySubsystem implements ServiceProxySubsystem {
@@ -855,6 +885,7 @@ class NodeServiceProxySubsystem implements ServiceProxySubsystem {
   constructor(
     private readonly logger: Logger,
     publicBaseUrl: string | null,
+    private readonly edgeBackend: EdgeBackendConfig | null,
   ) {
     this.routes = new ServiceProxyRouteRegistry(publicBaseUrl);
   }
@@ -918,8 +949,16 @@ class NodeServiceProxySubsystem implements ServiceProxySubsystem {
     return this.routes.projectWorkspaceServiceState(input);
   }
 
+  isRegisteredServiceHost(host: string | undefined): boolean {
+    return this.routes.classifyHost(host).type === "registered-service";
+  }
+
   middleware(): RequestHandler {
-    return createScriptProxyMiddleware({ routeStore: this.routes, logger: this.logger });
+    return createScriptProxyMiddleware({
+      routeStore: this.routes,
+      logger: this.logger,
+      edgeBackend: this.edgeBackend,
+    });
   }
 
   upgradeHandler(options: {
@@ -931,6 +970,7 @@ class NodeServiceProxySubsystem implements ServiceProxySubsystem {
       routeStore: this.routes,
       logger: this.logger,
       passthroughUnknown: options.passthroughUnknown,
+      edgeBackend: this.edgeBackend,
     });
   }
 
