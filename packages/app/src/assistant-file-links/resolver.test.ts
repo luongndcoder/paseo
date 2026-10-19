@@ -104,14 +104,14 @@ function suggestionsFromMap(entriesByQuery: Record<string, DirectorySuggestionEn
   getDirectorySuggestions: GetDirectorySuggestions;
   searches: Array<{
     query: string;
-    cwd: string;
+    cwd?: string;
     matchMode: "suffix";
     limit: number;
   }>;
 } {
   const searches: Array<{
     query: string;
-    cwd: string;
+    cwd?: string;
     matchMode: "suffix";
     limit: number;
   }> = [];
@@ -122,7 +122,9 @@ function suggestionsFromMap(entriesByQuery: Record<string, DirectorySuggestionEn
       matchMode: input.matchMode,
       limit: input.limit,
     });
-    return resolvedSuggestions(entriesByQuery[input.query] ?? []);
+    return resolvedSuggestions(
+      entriesByQuery[`${input.cwd ?? ""}|${input.query}`] ?? entriesByQuery[input.query] ?? [],
+    );
   };
   return { getDirectorySuggestions, searches };
 }
@@ -377,6 +379,104 @@ describe("fetchDaemonResolution", () => {
         getDirectorySuggestions: unavailableSuggestions,
       }),
     ).rejects.toEqual(new UnresolvedFileLinkError("dumm.md"));
+  });
+});
+
+describe("fetchDaemonResolution fallback directories", () => {
+  const target = {
+    raw: "architecture/prior-art.md",
+    path: "/Users/test/Documents/AI/architecture/prior-art.md",
+    lineStart: undefined,
+    lineEnd: undefined,
+  };
+  const base = {
+    ambiguousQuery: "architecture/prior-art.md",
+    token: "architecture/prior-art.md",
+    target,
+    workspaceRoot: "/Users/test/Documents/AI",
+  };
+
+  it("resolves a tilde directory mentioned in the message through a home-rooted lookup", async () => {
+    const { getDirectorySuggestions, searches } = suggestionsFromMap({
+      "|~/Documents/mobio/momir-docs/architecture/prior-art.md": [
+        { path: "/Users/test/Documents/mobio/momir-docs/architecture/prior-art.md", kind: "file" },
+      ],
+    });
+
+    const result = await fetchDaemonResolution({
+      ...base,
+      fallbackDirectories: ["~/Documents/mobio/momir-docs"],
+      getDirectorySuggestions,
+    });
+
+    expect(result.path).toBe("/Users/test/Documents/mobio/momir-docs/architecture/prior-art.md");
+    expect(searches.map((search) => search.cwd)).toEqual(["/Users/test/Documents/AI", undefined]);
+  });
+
+  it("resolves an absolute directory by searching it as cwd", async () => {
+    const { getDirectorySuggestions } = suggestionsFromMap({
+      "/opt/docs|architecture/prior-art.md": [{ path: "architecture/prior-art.md", kind: "file" }],
+    });
+
+    const result = await fetchDaemonResolution({
+      ...base,
+      fallbackDirectories: ["/opt/docs"],
+      getDirectorySuggestions,
+    });
+
+    expect(result.path).toBe("/opt/docs/architecture/prior-art.md");
+  });
+
+  it("prefers the workspace and makes no further calls when it resolves", async () => {
+    const { getDirectorySuggestions, searches } = suggestionsFromMap({
+      "architecture/prior-art.md": [{ path: "architecture/prior-art.md", kind: "file" }],
+    });
+
+    const result = await fetchDaemonResolution({
+      ...base,
+      fallbackDirectories: ["/opt/docs"],
+      getDirectorySuggestions,
+    });
+
+    expect(result.path).toBe("/Users/test/Documents/AI/architecture/prior-art.md");
+    expect(searches).toHaveLength(1);
+  });
+
+  it("tries mentioned directories in order and skips ones that fail", async () => {
+    const getDirectorySuggestions: GetDirectorySuggestions = async (input) => {
+      if (input.cwd === "/first") throw new Error("boom");
+      if (input.cwd === "/second")
+        return resolvedSuggestions([{ path: "architecture/prior-art.md", kind: "file" }]);
+      return resolvedSuggestions([]);
+    };
+
+    const result = await fetchDaemonResolution({
+      ...base,
+      fallbackDirectories: ["/first", "/second", "/third"],
+      getDirectorySuggestions,
+    });
+
+    expect(result.path).toBe("/second/architecture/prior-art.md");
+  });
+
+  it("rejects a home-rooted fuzzy hit that is not the requested file", async () => {
+    const { getDirectorySuggestions } = suggestionsFromMap({
+      "|~/x/architecture/prior-art.md": [
+        { path: "/Users/test/x/other/prior-art.md", kind: "file" },
+      ],
+    });
+
+    await expect(
+      fetchDaemonResolution({ ...base, fallbackDirectories: ["~/x"], getDirectorySuggestions }),
+    ).rejects.toEqual(new UnresolvedFileLinkError("architecture/prior-art.md"));
+  });
+
+  it("still reports no file found without fallback directories", async () => {
+    const { getDirectorySuggestions } = suggestionsFromMap({});
+
+    await expect(fetchDaemonResolution({ ...base, getDirectorySuggestions })).rejects.toEqual(
+      new UnresolvedFileLinkError("architecture/prior-art.md"),
+    );
   });
 });
 

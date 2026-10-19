@@ -22,6 +22,8 @@ export interface AssistantFileLinkResolverConfig {
   client?: AssistantFileLinkDaemonClient | null;
   serverId?: string;
   workspaceRoot?: string;
+  // Text of the assistant message the links belong to; mentioned directories are fallback bases.
+  messageText?: string;
   onOpenWorkspaceFile?: (target: InlinePathTarget, disposition: OpenFileDisposition) => void;
   toast?: ToastApi | null;
 }
@@ -42,6 +44,7 @@ export function AssistantFileLinkResolverProvider({
   client,
   serverId,
   workspaceRoot,
+  messageText,
   onOpenWorkspaceFile,
   toast,
   children,
@@ -50,10 +53,11 @@ export function AssistantFileLinkResolverProvider({
     client,
     serverId,
     workspaceRoot,
+    messageText,
     onOpenWorkspaceFile,
     toast,
   });
-  configRef.current = { client, serverId, workspaceRoot, onOpenWorkspaceFile, toast };
+  configRef.current = { client, serverId, workspaceRoot, messageText, onOpenWorkspaceFile, toast };
 
   const getDirectorySuggestions = useCallback<GetDirectorySuggestions>(async (input) => {
     const activeClient = configRef.current.client;
