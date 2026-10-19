@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useLayoutEffect,
   useMemo,
   useRef,
   type MutableRefObject,
@@ -32,6 +33,7 @@ export interface AssistantFileLinkResolverProviderProps extends AssistantFileLin
 }
 
 export interface AssistantFileLinkResolverContextValue {
+  config: AssistantFileLinkResolverConfig;
   configRef: MutableRefObject<AssistantFileLinkResolverConfig>;
   getDirectorySuggestions: GetDirectorySuggestions;
 }
@@ -48,15 +50,15 @@ export function AssistantFileLinkResolverProvider({
   toast,
   children,
 }: AssistantFileLinkResolverProviderProps) {
-  const configRef = useRef<AssistantFileLinkResolverConfig>({
-    client,
-    serverId,
-    workspaceRoot,
-    messageText,
-    onOpenWorkspaceFile,
-    toast,
-  });
-  configRef.current = { client, serverId, workspaceRoot, messageText, onOpenWorkspaceFile, toast };
+  const config = useMemo<AssistantFileLinkResolverConfig>(
+    () => ({ client, serverId, workspaceRoot, messageText, onOpenWorkspaceFile, toast }),
+    [client, serverId, workspaceRoot, messageText, onOpenWorkspaceFile, toast],
+  );
+  // Render reads go through `config`; async handlers read the latest committed config via the ref.
+  const configRef = useRef<AssistantFileLinkResolverConfig>(config);
+  useLayoutEffect(() => {
+    configRef.current = config;
+  }, [config]);
 
   const getDirectorySuggestions = useCallback<GetDirectorySuggestions>(async (input) => {
     const activeClient = configRef.current.client;
@@ -69,8 +71,8 @@ export function AssistantFileLinkResolverProvider({
   }, []);
 
   const value = useMemo<AssistantFileLinkResolverContextValue>(
-    () => ({ configRef, getDirectorySuggestions }),
-    [getDirectorySuggestions],
+    () => ({ config, configRef, getDirectorySuggestions }),
+    [config, getDirectorySuggestions],
   );
 
   return (
