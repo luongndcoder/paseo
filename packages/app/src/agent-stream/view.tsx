@@ -725,6 +725,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             client={client}
             serverId={resolvedServerId}
             workspaceRoot={workspaceRoot}
+            messageText={item.text}
             onOpenWorkspaceFile={handleInlinePathPress}
             toast={toast}
           >
