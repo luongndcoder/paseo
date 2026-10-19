@@ -9,6 +9,7 @@ import {
   useAssistantFileLinkResolverContext,
   type AssistantFileLinkResolverContextValue,
 } from "./provider";
+import { extractMentionedDirectories } from "./mentioned-directories";
 import {
   classifyForResolution,
   fetchDaemonResolution,
@@ -31,6 +32,7 @@ export interface AssistantFileLinkActions {
 
 interface AssistantFileLinkLookupKey {
   query: string;
+  fallbackDirectories: readonly string[];
   path: string;
   lineStart: number | null;
   lineEnd: number | null;
@@ -53,6 +55,11 @@ export function useFileLink(source: AssistantFileLinkSource): UseFileLinkResult 
   const activeConfig = context.configRef.current;
   const workspaceRoot = activeConfig.workspaceRoot;
   const serverId = activeConfig.serverId;
+  const messageText = activeConfig.messageText;
+  const fallbackDirectories = useMemo(
+    () => extractMentionedDirectories(messageText, workspaceRoot),
+    [messageText, workspaceRoot],
+  );
   const resolution = useMemo(
     () =>
       classifyForResolution(stableSource, {
@@ -66,10 +73,11 @@ export function useFileLink(source: AssistantFileLinkSource): UseFileLinkResult 
         ? assistantFileLinkQueryKey({
             serverId,
             workspaceRoot,
+            fallbackDirectories,
             resolution,
           })
         : DISABLED_QUERY_KEY,
-    [resolution, serverId, workspaceRoot],
+    [resolution, serverId, workspaceRoot, fallbackDirectories],
   );
 
   const query = useQuery({
@@ -83,6 +91,7 @@ export function useFileLink(source: AssistantFileLinkSource): UseFileLinkResult 
         token: resolution.token,
         target: resolution.target,
         workspaceRoot,
+        fallbackDirectories,
         getDirectorySuggestions: context.getDirectorySuggestions,
       });
     },
@@ -116,6 +125,7 @@ export function useFileLink(source: AssistantFileLinkSource): UseFileLinkResult 
           token: resolution.token,
           target: resolution.target,
           workspaceRoot,
+          fallbackDirectories,
           getDirectorySuggestions: context.getDirectorySuggestions,
         }),
       retry: 0,
@@ -183,9 +193,14 @@ function openAssistantFileLink(input: {
     return;
   }
 
+  const capturedFallbackDirectories = extractMentionedDirectories(
+    capturedConfig.messageText,
+    capturedConfig.workspaceRoot,
+  );
   const capturedQueryKey = assistantFileLinkQueryKey({
     serverId: capturedConfig.serverId,
     workspaceRoot: capturedConfig.workspaceRoot,
+    fallbackDirectories: capturedFallbackDirectories,
     resolution: capturedResolution,
   });
 
@@ -199,6 +214,7 @@ function openAssistantFileLink(input: {
             token: capturedResolution.token,
             target: capturedResolution.target,
             workspaceRoot: capturedConfig.workspaceRoot,
+            fallbackDirectories: capturedFallbackDirectories,
             getDirectorySuggestions: input.context.getDirectorySuggestions,
           }),
         retry: 0,
@@ -252,6 +268,7 @@ function useStableSource(source: AssistantFileLinkSource): AssistantFileLinkSour
 function assistantFileLinkQueryKey(input: {
   serverId?: string;
   workspaceRoot?: string;
+  fallbackDirectories: readonly string[];
   resolution: Extract<AssistantFileLinkResolution, { kind: "needsLookup" }>;
 }): AssistantFileLinkQueryKey {
   return [
@@ -260,6 +277,7 @@ function assistantFileLinkQueryKey(input: {
     input.workspaceRoot ?? null,
     {
       query: input.resolution.ambiguousQuery,
+      fallbackDirectories: input.fallbackDirectories,
       path: input.resolution.target.path,
       lineStart: input.resolution.target.lineStart ?? null,
       lineEnd: input.resolution.target.lineEnd ?? null,

@@ -47,7 +47,7 @@ interface OpenedFile {
 interface TestClient {
   getDirectorySuggestions: (input: {
     query: string;
-    cwd: string;
+    cwd?: string;
     includeFiles: true;
     includeDirectories: false;
     matchMode: "suffix";
@@ -72,7 +72,12 @@ function createToast(): ToastApi {
   };
 }
 
-function createWrapper(input: { client: TestClient; openedFiles: OpenedFile[]; toast?: ToastApi }) {
+function createWrapper(input: {
+  client: TestClient;
+  openedFiles: OpenedFile[];
+  toast?: ToastApi;
+  messageText?: string;
+}) {
   const queryClient = createQueryClient();
   return function Wrapper({ children }: { children: ReactNode }) {
     const openWorkspaceFile = useCallback(
@@ -88,6 +93,7 @@ function createWrapper(input: { client: TestClient; openedFiles: OpenedFile[]; t
           client={input.client}
           serverId="server-1"
           workspaceRoot="/Users/test/project"
+          messageText={input.messageText}
           onOpenWorkspaceFile={openWorkspaceFile}
           toast={input.toast}
         >
@@ -322,6 +328,108 @@ describe("useFileLink", () => {
       expect(getDirectorySuggestions).toHaveBeenCalledTimes(1);
     });
     expect(openedFiles).toEqual([]);
+  });
+});
+
+describe("useFileLink relative links outside the workspace", () => {
+  const RELATIVE_SOURCE = {
+    href: "architecture/prior-art.md",
+    text: "architecture/prior-art.md",
+    sourceType: "inline-code" as const,
+  };
+  const MESSAGE =
+    "Mình đã cập nhật `~/Documents/mobio/momir-docs`: `architecture/prior-art.md`, `README.md`";
+  const homeLookup = (input: { query: string; cwd?: string }) =>
+    input.cwd === undefined &&
+    input.query === "~/Documents/mobio/momir-docs/architecture/prior-art.md";
+
+  it("opens the file from a directory mentioned in the same message", async () => {
+    const getDirectorySuggestions = vi.fn(async (input: { query: string; cwd?: string }) =>
+      resolvedSuggestions(
+        homeLookup(input)
+          ? [
+              {
+                path: "/Users/test/Documents/mobio/momir-docs/architecture/prior-art.md",
+                kind: "file" as const,
+              },
+            ]
+          : [],
+      ),
+    );
+    const openedFiles: OpenedFile[] = [];
+    const toast = createToast();
+    const { result } = renderHook(() => useFileLink(RELATIVE_SOURCE), {
+      wrapper: createWrapper({
+        client: { getDirectorySuggestions },
+        openedFiles,
+        toast,
+        messageText: MESSAGE,
+      }),
+    });
+
+    act(() => {
+      result.current.onPress();
+    });
+
+    await waitFor(() => {
+      expect(openedFiles).toHaveLength(1);
+    });
+    expect(openedFiles[0].target.path).toBe(
+      "/Users/test/Documents/mobio/momir-docs/architecture/prior-art.md",
+    );
+    expect(toast.show).not.toHaveBeenCalled();
+  });
+
+  it("shows no file found when the message mentions no directory", async () => {
+    const getDirectorySuggestions = vi.fn(async () => resolvedSuggestions([]));
+    const openedFiles: OpenedFile[] = [];
+    const toast = createToast();
+    const { result } = renderHook(() => useFileLink(RELATIVE_SOURCE), {
+      wrapper: createWrapper({
+        client: { getDirectorySuggestions },
+        openedFiles,
+        toast,
+        messageText: "Updated `architecture/prior-art.md`",
+      }),
+    });
+
+    act(() => {
+      result.current.onPress();
+    });
+
+    await waitFor(() => {
+      expect(toast.show).toHaveBeenCalledTimes(1);
+    });
+    expect(getDirectorySuggestions).toHaveBeenCalledTimes(1);
+    expect(openedFiles).toEqual([]);
+  });
+
+  it("prefers the workspace over a mentioned directory", async () => {
+    const getDirectorySuggestions = vi.fn(async (input: { cwd?: string }) =>
+      resolvedSuggestions(
+        input.cwd === "/Users/test/project"
+          ? [{ path: "architecture/prior-art.md", kind: "file" as const }]
+          : [{ path: "/elsewhere/architecture/prior-art.md", kind: "file" as const }],
+      ),
+    );
+    const openedFiles: OpenedFile[] = [];
+    const { result } = renderHook(() => useFileLink(RELATIVE_SOURCE), {
+      wrapper: createWrapper({
+        client: { getDirectorySuggestions },
+        openedFiles,
+        messageText: MESSAGE,
+      }),
+    });
+
+    act(() => {
+      result.current.onPress();
+    });
+
+    await waitFor(() => {
+      expect(openedFiles).toHaveLength(1);
+    });
+    expect(openedFiles[0].target.path).toBe("/Users/test/project/architecture/prior-art.md");
+    expect(getDirectorySuggestions).toHaveBeenCalledTimes(1);
   });
 });
 
