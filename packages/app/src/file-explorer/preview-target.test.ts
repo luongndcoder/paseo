@@ -26,6 +26,18 @@ describe("resolveFilePreviewReadTarget", () => {
     });
   });
 
+  it("reads a file from a sibling tree of the workspace through the filesystem root", () => {
+    expect(
+      resolveFilePreviewReadTarget({
+        path: "/Users/test/Documents/mobio/momir-docs/architecture/prior-art.md",
+        workspaceRoot: "/Users/test/Documents/AI",
+      }),
+    ).toEqual({
+      cwd: "/",
+      path: "/Users/test/Documents/mobio/momir-docs/architecture/prior-art.md",
+    });
+  });
+
   it("uses the filesystem root for absolute paths outside the workspace", () => {
     expect(
       resolveFilePreviewReadTarget({
