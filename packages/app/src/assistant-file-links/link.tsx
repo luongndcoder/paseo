@@ -32,8 +32,8 @@ export function AssistantMarkdownLink({
   children,
 }: AssistantMarkdownLinkProps) {
   const { target, onHoverIn, onPress } = useFileLink(source);
-  const { configRef } = useAssistantFileLinkResolverContext();
-  const workspaceRoot = configRef.current.workspaceRoot;
+  const { config } = useAssistantFileLinkResolverContext();
+  const workspaceRoot = config.workspaceRoot;
   const tooltipPath = useMemo(
     () => (target ? formatFileLinkTooltipPath({ target, workspaceRoot }) : null),
     [target, workspaceRoot],

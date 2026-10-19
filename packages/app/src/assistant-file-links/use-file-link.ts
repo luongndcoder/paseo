@@ -52,7 +52,7 @@ export function useFileLink(source: AssistantFileLinkSource): UseFileLinkResult 
   const context = useAssistantFileLinkResolverContext();
   const queryClient = useQueryClient();
   const stableSource = useStableSource(source);
-  const activeConfig = context.configRef.current;
+  const activeConfig = context.config;
   const workspaceRoot = activeConfig.workspaceRoot;
   const serverId = activeConfig.serverId;
   const messageText = activeConfig.messageText;
