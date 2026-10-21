@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import { StyleSheet } from "react-native-unistyles";
 import { HighlightedCodeBlock } from "@/components/highlighted-code-block";
 import { ZoomableViewport } from "@/components/zoomable-viewport";
-import type { MarkdownFenceRendererProps } from "../types";
+import type { MarkdownFenceRendererProps } from "../mermaid/types";
 import { getDiagramBoxStyle } from "../mermaid/presentation";
 import { buildPlantUmlSvgUrl } from "./encode-source";
 

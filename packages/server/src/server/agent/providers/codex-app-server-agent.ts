@@ -3461,6 +3461,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   private client: CodexAppServerClient | null = null;
   private threadRollbackAvailable = true;
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
+  private startupEvents: AgentStreamEvent[] | null = null;
   private nextTurnOrdinal = 0;
   private activeForegroundTurnId: string | null = null;
   private activeClientMessageId: string | null = null;
@@ -3579,6 +3580,8 @@ export class CodexAppServerAgentSession implements AgentSession {
     if (this.resumeHandle?.sessionId) {
       this.currentThreadId = this.resumeHandle.sessionId;
       this.historyPending = true;
+      // Resuming can start a goal before the caller receives the session.
+      if (this.initialResumePurpose === "interactive") this.startupEvents = [];
     }
   }
 
@@ -4551,6 +4554,9 @@ export class CodexAppServerAgentSession implements AgentSession {
 
   subscribe(callback: (event: AgentStreamEvent) => void): () => void {
     this.subscribers.add(callback);
+    const startupEvents = this.startupEvents;
+    this.startupEvents = null;
+    for (const event of startupEvents ?? []) this.notifySubscribers(event);
     return () => {
       this.subscribers.delete(callback);
     };
@@ -5036,6 +5042,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.clearPendingPermissions();
     this.pendingSubAgentNotificationsByThreadId.clear();
     this.subscribers.clear();
+    this.startupEvents = null;
     this.activeForegroundTurnId = null;
     this.activeClientMessageId = null;
     this.pendingForegroundTurnIdentification?.resolve(null);
@@ -5383,6 +5390,10 @@ export class CodexAppServerAgentSession implements AgentSession {
   private notifySubscribers(event: AgentStreamEvent): void {
     const turnId = getAgentStreamEventTurnId(event) ?? this.activeForegroundTurnId;
     const tagged = turnId ? { ...event, turnId } : event;
+    if (this.startupEvents) {
+      this.startupEvents.push(tagged);
+      return;
+    }
     this.logger.trace(
       {
         agentId: this.agentId,

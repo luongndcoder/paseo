@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "../support/fixtures";
 import {
   blurComposerInput,
+  roundTripComposerTabBeforePaint,
   composerLocator,
   enterComposerFullscreen,
   exitComposerFullscreen,
@@ -15,6 +16,8 @@ import {
   typeIntoFocusedComposer,
 } from "../support/helpers/composer";
 import { openAgentRoute, seedMockAgentWorkspace } from "../support/helpers/mock-agent";
+import { createMockIdleAgent, openWorkspaceWithAgents } from "../support/helpers/archive-tab";
+import { seedWorkspace } from "../support/helpers/seed-client";
 import {
   closeMobileAgentSidebar,
   closeMobileExplorer,
@@ -166,6 +169,61 @@ test.describe("touch screen wide enough for the desktop layout", () => {
   // A tablet or an unfolded foldable gets the desktop layout, but focusing the
   // composer there raises the on-screen keyboard over the conversation.
   test.use({ viewport: { width: 1024, height: 768 }, isMobile: true, hasTouch: true });
+
+  test("remounting an inline composer does not restore focus on touch", async ({ page }) => {
+    const agent = await seedMockAgentWorkspace({
+      repoPrefix: "composer-touch-remount-",
+      title: "Touch remount",
+    });
+    try {
+      await openAgentRoute(page, agent);
+      await composerLocator(page).fill("Keep this draft through resize");
+      await expectComposerFocused(page);
+      await resizeComposerViewport(page, "portrait");
+      await expectComposerDraft(page, "Keep this draft through resize");
+      await expectComposerNotFocused(page);
+      await composerLocator(page).tap();
+      await expectComposerFocused(page);
+    } finally {
+      await agent.cleanup();
+    }
+  });
+
+  test("returning to an inactive inline composer does not restore focus on touch", async ({
+    page,
+  }) => {
+    const workspace = await seedWorkspace({ repoPrefix: "composer-touch-retained-" });
+    try {
+      const first = await createMockIdleAgent(workspace.client, {
+        cwd: workspace.repoPath,
+        workspaceId: workspace.workspaceId,
+        title: "First touch chat",
+      });
+      const second = await createMockIdleAgent(workspace.client, {
+        cwd: workspace.repoPath,
+        workspaceId: workspace.workspaceId,
+        title: "Second touch chat",
+      });
+      await openWorkspaceWithAgents(page, [first, second]);
+      // Repeat after an explicit edit so retained focus from an earlier visit is
+      // also dismissed when the same mounted editor becomes inactive again.
+      for (const draft of ["Keep this touch draft", "Edit this touch draft again"]) {
+        await composerLocator(page).fill(draft);
+        await expectComposerFocused(page);
+        // An external keyboard changes tabs without a pointer click blurring the
+        // editor first. The device still has a touch-primary focus policy.
+        await roundTripComposerTabBeforePaint(page, "Second touch chat");
+        await expectComposerDraft(page, draft);
+        await expectComposerNotFocused(page);
+        await composerLocator(page).tap();
+        await expectComposerFocused(page);
+        await typeIntoFocusedComposer(page, " after return");
+        await expectComposerDraft(page, `${draft} after return`);
+      }
+    } finally {
+      await workspace.cleanup();
+    }
+  });
 
   test("opening an agent leaves the composer unfocused", async ({ page }) => {
     const agent = await seedMockAgentWorkspace({

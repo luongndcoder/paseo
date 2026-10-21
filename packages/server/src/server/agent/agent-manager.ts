@@ -79,7 +79,7 @@ import {
   type PendingForegroundRun,
 } from "./agent-run-state.js";
 import { invokeRewindCapability, type RewindMode } from "./rewind/rewind.js";
-import { projectAgentMessage } from "./agent-messages/index.js";
+import { parseAgentMessage, projectAgentMessage } from "./agent-messages/index.js";
 import {
   StaleProviderSessionError,
   isStaleProviderSessionError,
@@ -339,6 +339,7 @@ export interface AgentManagerOptions {
   registry?: AgentStorage;
   onAgentAttention?: AgentAttentionCallback;
   onWorkspaceStateMayHaveChanged?: (params: { cwd: string }) => void;
+  timelineStore?: InMemoryAgentTimelineStore;
   durableTimelineStore?: AgentTimelineStore;
   terminalManager?: TerminalManager | null;
   mcpBaseUrl?: string;
@@ -754,7 +755,7 @@ export class AgentManager {
   private readonly providerEnabled = new Map<AgentProvider, boolean>();
   private readonly providerDefinitions = new Map<AgentProvider, ProviderEnabledFlag>();
   private readonly agents = new Map<string, LiveManagedAgent>();
-  private readonly timelineStore = new InMemoryAgentTimelineStore();
+  private readonly timelineStore: InMemoryAgentTimelineStore;
   private readonly providerSubagents = new ProviderSubagentStore();
   private readonly agentsAwaitingInitialSnapshotPersist = new Set<string>();
   private readonly sessionEventTails = new Map<string, Promise<void>>();
@@ -791,7 +792,8 @@ export class AgentManager {
 
   constructor(options: AgentManagerOptions) {
     this.pluginLifecycle = options.pluginLifecycle;
-    this.idFactory = options?.idFactory ?? (() => randomUUID());
+    this.timelineStore = options.timelineStore ?? new InMemoryAgentTimelineStore();
+    this.idFactory = options.idFactory ?? (() => randomUUID());
     this.registry = options?.registry;
     this.durableTimelineStore = options?.durableTimelineStore;
     this.onAgentAttention = options?.onAgentAttention;
@@ -2472,7 +2474,12 @@ export class AgentManager {
    */
   tryRunOutOfBand(agentId: string, prompt: AgentPromptInput, options?: AgentRunOptions): boolean {
     const agent = this.requireSessionAgent(agentId);
-    const handler = agent.session.tryHandleOutOfBand?.(prompt);
+    // Providers parse slash commands from the raw text, so a command another agent sent
+    // must reach them without its sender envelope.
+    const agentMessage = typeof prompt === "string" ? parseAgentMessage(prompt) : null;
+    const handler = agent.session.tryHandleOutOfBand?.(
+      agentMessage?.source ? agentMessage.text : prompt,
+    );
     if (!handler) {
       return false;
     }
@@ -3671,6 +3678,8 @@ export class AgentManager {
       this.assertAgentRegistrationActive(managed);
       this.emitState(managed, { persist: false });
       this.subscribeToSession(managed);
+      await this.drainSessionEvents(managed.id);
+      this.assertAgentRegistrationActive(managed);
       return { ...managed };
     } catch (error) {
       if (!registered) {
@@ -5179,7 +5188,6 @@ export class AgentManager {
         this.pluginLifecycle,
         describeHookAgent({ ...agent, title: agent.config.title }),
         event,
-        this.timelineStore.getItems(agentId),
       );
     }
   }

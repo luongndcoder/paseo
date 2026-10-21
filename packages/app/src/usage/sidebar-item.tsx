@@ -157,6 +157,7 @@ function resolveZeroSubPinnedUsage(
 
 /** Each summary window with data on the usage host, under its source; empty while none has. */
 function useUsageSummary(): readonly PinnedUsageSource[] {
+  const { t } = useTranslation();
   const { preferences } = useUsagePreferences();
   const hostId = useUsageHostId();
   const zeroSubPlugin = useZeroSubPlugin();
@@ -182,8 +183,8 @@ function useUsageSummary(): readonly PinnedUsageSource[] {
       const zeroSubSources = resolveZeroSubPinnedUsage(zeroSubQuery.data, preferences.displayAs);
       if (zeroSubSources.length > 0) return zeroSubSources;
     }
-    return resolvePinnedUsage(reports, preferences);
-  }, [preferences, reports, zeroSubPlugin, zeroSubQuery.data]);
+    return resolvePinnedUsage(reports, preferences, t);
+  }, [preferences, reports, t, zeroSubPlugin, zeroSubQuery.data]);
 }
 
 /** Whether the sidebar Usage item has anything to show. */
