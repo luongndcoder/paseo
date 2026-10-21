@@ -129,9 +129,8 @@ describe("PluginRuntime in-process plugins", () => {
     );
     const { runtime, sessions } = createRuntime();
     await runtime.startPlugin("stoppable", directory, () => true, { runtime: "in-process" });
-    await expect
-      .poll(() => runtime.getLogs("stoppable").map((entry) => entry.message))
-      .toContain("tick");
+    const stoppableMessages = () => runtime.getLogs("stoppable").map((entry) => entry.message);
+    await expect.poll(stoppableMessages).toContain("tick");
 
     await runtime.stopPluginById("stoppable");
     const logged = runtime.getLogs("stoppable").length;
