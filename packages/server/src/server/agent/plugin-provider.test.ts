@@ -844,6 +844,96 @@ test("commits notices emitted during session open as the initial timeline with s
   );
 });
 
+describe("steerActiveTurn capability gating", () => {
+  test("leaves steerActiveTurn undefined when provider does not advertise prompt.steer capability", async () => {
+    await withObservedProvider({}, async (client) => {
+      const session = await client.createSession({ provider: client.provider, cwd: "/workspace" });
+      try {
+        expect(session.steerActiveTurn).toBeUndefined();
+      } finally {
+        await session.close();
+      }
+    });
+  });
+
+  test("implements steerActiveTurn when provider advertises prompt.steer capability", async () => {
+    let steeredInput: ProviderInput | null = null;
+    await withObservedProvider(
+      {
+        capabilities: [...CAPABILITIES, "prompt.steer"],
+        async handleInput(input, emit) {
+          if (input.type === "session.prompt" && input.prompt.delivery === "steer") {
+            steeredInput = input;
+            emit({
+              type: "session.prompt_result",
+              sessionId: input.sessionId,
+              clientMessageId: input.prompt.clientMessageId,
+              result: { type: "steer", turnId: "turn-1" },
+            });
+            return true;
+          }
+          return false;
+        },
+      },
+      async (client) => {
+        const session = await client.createSession({
+          provider: client.provider,
+          cwd: "/workspace",
+        });
+        try {
+          expect(session.steerActiveTurn).toBeDefined();
+          const result = await session.steerActiveTurn!("steer this turn", {
+            expectedTurnId: "turn-1",
+          });
+          expect(result).toEqual({ status: "accepted" });
+          expect(steeredInput).toMatchObject({
+            type: "session.prompt",
+            prompt: {
+              delivery: "steer",
+              input: { type: "message", content: [{ type: "text", text: "steer this turn" }] },
+            },
+          });
+        } finally {
+          await session.close();
+        }
+      },
+    );
+  });
+
+  test("steerActiveTurn returns unavailable for slash commands or when prompt fails capability checks", async () => {
+    await withObservedProvider(
+      {
+        capabilities: [...CAPABILITIES, "prompt.steer"],
+      },
+      async (client) => {
+        const session = await client.createSession({
+          provider: client.provider,
+          cwd: "/workspace",
+        });
+        try {
+          // Commands cannot be steered
+          const commandResult = await session.steerActiveTurn!("/compact", {
+            expectedTurnId: "turn-1",
+          });
+          expect(commandResult).toEqual({ status: "unavailable" });
+
+          // Images without prompt.image capability return unavailable
+          const imageResult = await session.steerActiveTurn!(
+            [
+              { type: "text", text: "check image" },
+              { type: "image", data: "base64data", mimeType: "image/png" },
+            ],
+            { expectedTurnId: "turn-1" },
+          );
+          expect(imageResult).toEqual({ status: "unavailable" });
+        } finally {
+          await session.close();
+        }
+      },
+    );
+  });
+});
+
 describe("pending provider responses", () => {
   test.each<RequestKind>(["session.open", "catalog", "session.configure", "session.prompt"])(
     "preserves the send error for %s",

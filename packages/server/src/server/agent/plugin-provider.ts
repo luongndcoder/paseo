@@ -1092,6 +1092,10 @@ class PluginAgentClient implements AgentClient {
 
 class PluginAgentSession implements AgentSession {
   readonly initialTimeline: ImportedProviderSession["timeline"];
+  readonly steerActiveTurn?: (
+    prompt: AgentPromptInput,
+    options: SteerActiveTurnOptions,
+  ) => Promise<SteerResult>;
   private readonly listeners = new Set<(event: AgentStreamEvent) => void>();
   private readonly history: AgentStreamEvent[] = [];
   private readonly pendingPermissions = new Map<string, AgentPermissionRequest>();
@@ -1118,6 +1122,39 @@ class PluginAgentSession implements AgentSession {
       (entry) => entry.item.type === "notification",
     );
     this.unsubscribe = bridge.onEvent((event) => this.accept(event, true));
+    if (bridge.negotiatedCapabilities.includes("prompt.steer")) {
+      this.steerActiveTurn = async (prompt, options) => {
+        const command = mapPromptInput(prompt, this.bridge.commands);
+        if (command.type === "command") {
+          return { status: "unavailable" };
+        }
+        if (
+          command.content.some((part) => part.type === "image") &&
+          !this.bridge.negotiatedCapabilities.includes("prompt.image")
+        ) {
+          return { status: "unavailable" };
+        }
+        try {
+          const result = await this.bridge.prompt({
+            clientMessageId: options.clientMessageId ?? randomUUID(),
+            delivery: "steer",
+            input: command,
+            ...(options.outputSchema === undefined
+              ? {}
+              : { outputSchema: toJsonValue(options.outputSchema, "output schema") }),
+            clearPendingPermissions: options.clearPendingPermissions,
+          });
+          return result.type === "steer" && result.turnId === options.expectedTurnId
+            ? { status: "accepted" }
+            : { status: "unavailable" };
+        } catch (error) {
+          if (error instanceof Error && error.message.includes("Provider does not support")) {
+            return { status: "unavailable" };
+          }
+          throw error;
+        }
+      };
+    }
   }
 
   get id(): string {
@@ -1169,24 +1206,6 @@ class PluginAgentSession implements AgentSession {
     this.publish({ type: "turn_started", provider: this.provider, turnId });
     this.publish({ type: "turn_completed", provider: this.provider, turnId });
     return { turnId };
-  }
-
-  async steerActiveTurn(
-    prompt: AgentPromptInput,
-    options: SteerActiveTurnOptions,
-  ): Promise<SteerResult> {
-    const result = await this.bridge.prompt({
-      clientMessageId: options.clientMessageId ?? randomUUID(),
-      delivery: "steer",
-      input: { type: "message", content: mapPromptContent(prompt) },
-      ...(options.outputSchema === undefined
-        ? {}
-        : { outputSchema: toJsonValue(options.outputSchema, "output schema") }),
-      clearPendingPermissions: options.clearPendingPermissions,
-    });
-    return result.type === "steer" && result.turnId === options.expectedTurnId
-      ? { status: "accepted" }
-      : { status: "unavailable" };
   }
 
   subscribe(callback: (event: AgentStreamEvent) => void): () => void {
