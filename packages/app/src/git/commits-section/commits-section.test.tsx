@@ -57,6 +57,11 @@ describe("CommitsSection", () => {
     });
 
     const header = document.querySelector('[data-testid="commits-section-header"]');
-    expect(header?.parentElement?.getAttribute("style")).toContain("padding-bottom: 34px");
+    // header toggle -> header row -> container (owns the safe-area bottom padding)
+    const container = header?.parentElement?.parentElement;
+    expect(
+      container?.querySelector('[data-testid="commits-section-resize-handle"]'),
+    ).not.toBeNull();
+    expect(container?.getAttribute("style")).toContain("padding-bottom: 34px");
   });
 });
