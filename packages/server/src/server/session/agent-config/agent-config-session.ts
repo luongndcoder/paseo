@@ -2,7 +2,7 @@ import type pino from "pino";
 import { v4 as uuidv4 } from "uuid";
 import { getErrorMessage, getErrorMessageOr } from "@getpaseo/protocol/error-utils";
 import type { AgentConfigApply } from "@getpaseo/protocol/messages";
-import type { AgentProviderNotice } from "../../agent/agent-sdk-types.js";
+import type { AgentProviderNotice, AgentSlashCommand } from "../../agent/agent-sdk-types.js";
 import type { SessionInboundMessage, SessionOutboundMessage } from "../../messages.js";
 
 /**
@@ -33,6 +33,22 @@ export interface AgentConfigOperations {
     agentId: string,
     thinkingOptionId: string | null,
   ): Promise<AgentProviderNotice | null>;
+  resolveCommandSource(agentId: string): Promise<AgentCommandSource>;
+  listDraftCommands(draftConfig: ListCommandsDraftConfig): Promise<AgentSlashCommand[]>;
+}
+
+/** Draft config as carried by `list_commands_request`, before tilde expansion. */
+export type ListCommandsDraftConfig = NonNullable<
+  Extract<SessionInboundMessage, { type: "list_commands_request" }>["draftConfig"]
+>;
+
+/**
+ * What the shell found for a command listing: `found` says whether the agent
+ * exists (live or loadable); `listCommands` is absent when its session cannot list.
+ */
+export interface AgentCommandSource {
+  found: boolean;
+  listCommands?: () => Promise<AgentSlashCommand[]>;
 }
 
 export interface AgentConfigSessionOptions {
@@ -133,6 +149,56 @@ export class AgentConfigSession {
       run: () => this.operations.setThinking(agentId, thinkingOptionId),
       emitResponse: (payload) => this.host.emit({ type: "set_agent_thinking_response", payload }),
     });
+  }
+
+  async handleListCommandsRequest(
+    msg: Extract<SessionInboundMessage, { type: "list_commands_request" }>,
+  ): Promise<void> {
+    const { agentId, requestId, draftConfig } = msg;
+    this.logger.debug(
+      { agentId, draftConfig },
+      `Handling list commands request for agent ${agentId}`,
+    );
+
+    try {
+      const source = await this.operations.resolveCommandSource(agentId);
+
+      if (source.listCommands) {
+        const commands = await source.listCommands();
+        this.host.emit({
+          type: "list_commands_response",
+          payload: { agentId, commands, error: null, requestId },
+        });
+        return;
+      }
+
+      if (!source.found && draftConfig) {
+        const commands = await this.operations.listDraftCommands(draftConfig);
+        this.host.emit({
+          type: "list_commands_response",
+          payload: { agentId, commands, error: null, requestId },
+        });
+        return;
+      }
+
+      this.host.emit({
+        type: "list_commands_response",
+        payload: {
+          agentId,
+          commands: [],
+          error: source.found
+            ? `Agent does not support listing commands`
+            : `Agent not found: ${agentId}`,
+          requestId,
+        },
+      });
+    } catch (error) {
+      this.logger.error({ err: error, agentId, draftConfig }, "Failed to list commands");
+      this.host.emit({
+        type: "list_commands_response",
+        payload: { agentId, commands: [], error: getErrorMessage(error), requestId },
+      });
+    }
   }
 
   handleAgentConfigApplyRequest(
