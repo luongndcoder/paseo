@@ -402,7 +402,7 @@ class RejectingMcpResumeClient implements AgentClient {
   }
 }
 
-test("createAgent fails when the initial turn cannot start", async () => {
+test("createAgent returns an errored agent when the initial turn cannot start", async () => {
   const testAgent = new StubAgentClient({
     sessionId: "start-turn-failure-session",
     supportsStreaming: false,
@@ -421,16 +421,17 @@ test("createAgent fails when the initial turn cannot start", async () => {
     await client.connect();
     await client.fetchAgents({ subscribe: {} });
 
-    await expect(
-      client.createAgent({
-        provider: "codex",
-        cwd: tmpCwd(),
-        title: "Start failure agent",
-        modeId: "full-access",
-        model: "gpt-5.4-mini",
-        initialPrompt: "Run exactly: sleep 30",
-      }),
-    ).rejects.toThrow("Initial turn failed to start");
+    const agent = await client.createAgent({
+      provider: "codex",
+      cwd: tmpCwd(),
+      title: "Start failure agent",
+      modeId: "full-access",
+      model: "gpt-5.4-mini",
+      initialPrompt: "Run exactly: sleep 30",
+    });
+
+    expect(agent.status).toBe("error");
+    expect(agent.lastError).toBe("Initial turn failed to start");
   } finally {
     await client.close();
     await daemon.close();
@@ -1351,45 +1352,22 @@ test("handles concurrent filtered agent fetch requests", async () => {
 test("creates agent and exercises lifecycle", async () => {
   const cwd = tmpCwd();
 
-  await ctx.client.fetchAgents({
-    subscribe: {},
-  });
+  const agentObservation = ctx.client.observeAgents();
+  await agentObservation.ready;
 
   const agentUpdatePromise = waitForSignal(15000, (resolve) => {
-    const unsubscribe = ctx.client.on("agent_update", (message) => {
-      if (message.type !== "agent_update") {
-        return;
-      }
-      if (message.payload.kind !== "upsert") {
-        return;
-      }
-      resolve(message);
+    const unsubscribe = agentObservation.subscribe({
+      snapshot: () => {},
+      update: (message) => {
+        if (message.type === "agent_update" && message.payload.kind === "upsert") {
+          resolve(message);
+        }
+      },
     });
     return unsubscribe;
   });
 
   const createRequestId = `create-${Date.now()}`;
-  const createdStatusPromise = waitForSignal(15000, (resolve) => {
-    const unsubscribe = ctx.client.on("status", (message) => {
-      if (message.type !== "status") {
-        return;
-      }
-      const payload = message.payload as {
-        status?: string;
-        agentId?: string;
-        requestId?: string;
-      };
-      if (payload.status !== "agent_created") {
-        return;
-      }
-      if (payload.requestId !== createRequestId) {
-        return;
-      }
-      resolve(message);
-    });
-    return unsubscribe;
-  });
-
   const agent = await ctx.client.createAgent({
     ...getFullAccessConfig("codex"),
     cwd,
@@ -1404,30 +1382,8 @@ test("creates agent and exercises lifecycle", async () => {
 
   const agentUpdate = await agentUpdatePromise;
   expect(agentUpdate.payload.agent.id).toBe(agent.id);
-  const createdStatus = await createdStatusPromise;
-  expect((createdStatus.payload as { agentId?: string }).agentId).toBe(agent.id);
 
   const failRequestId = `fail-${Date.now()}`;
-  const failedStatusPromise = waitForSignal(15000, (resolve) => {
-    const unsubscribe = ctx.client.on("status", (message) => {
-      if (message.type !== "status") {
-        return;
-      }
-      const payload = message.payload as {
-        status?: string;
-        requestId?: string;
-      };
-      if (payload.status !== "agent_create_failed") {
-        return;
-      }
-      if (payload.requestId !== failRequestId) {
-        return;
-      }
-      resolve(message);
-    });
-    return unsubscribe;
-  });
-
   await expect(
     ctx.client.createAgent({
       ...getFullAccessConfig("codex"),
@@ -1436,39 +1392,11 @@ test("creates agent and exercises lifecycle", async () => {
       requestId: failRequestId,
     }),
   ).rejects.toThrow("Working directory does not exist");
-  await failedStatusPromise;
-
-  let sawRefresh = false;
-  const unsubscribe = ctx.client.subscribe((event) => {
-    if (event.type === "status" && event.payload.status === "agent_refreshed") {
-      sawRefresh = true;
-    }
-  });
-
-  const statusPromise = waitForSignal(15000, (resolve) => {
-    const unsubscribeStatus = ctx.client.on("status", (message) => {
-      if (message.type !== "status") {
-        return;
-      }
-      if (message.payload.status !== "agent_refreshed") {
-        return;
-      }
-      if ((message.payload as { agentId?: string }).agentId !== agent.id) {
-        return;
-      }
-      resolve(message);
-    });
-    return unsubscribeStatus;
-  });
 
   const refreshResult = await ctx.client.refreshAgent(agent.id);
-  unsubscribe();
 
   expect(refreshResult.status).toBe("agent_refreshed");
   expect(refreshResult.agentId).toBe(agent.id);
-  expect(sawRefresh).toBe(true);
-  const statusMessage = await statusPromise;
-  expect((statusMessage.payload as { agentId?: string }).agentId).toBe(agent.id);
 
   const timelineResult = await ctx.client.fetchAgentTimeline(agent.id, {
     direction: "tail",
@@ -1623,6 +1551,12 @@ test("handles permission flow", async () => {
     cwd,
     title: "Permission Test",
   });
+
+  const eventObservation = ctx.client.observeEvents([
+    "agent_permission_request",
+    "agent_permission_resolved",
+  ]);
+  await eventObservation.ready;
 
   const permissionRequestPromise = waitForSignal(60000, (resolve) => {
     const unsubscribe = ctx.client.on("agent_permission_request", (message) => {

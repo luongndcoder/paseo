@@ -2591,6 +2591,7 @@ diff --git a/file.txt b/file.txt
       payload: {
         cwd: "/tmp/request-worktree",
         success: true,
+        generatedMessage: "Ship it",
         error: null,
         requestId: "request-commit",
       },
@@ -2653,6 +2654,7 @@ diff --git a/file.txt b/file.txt
       payload: {
         cwd: "/tmp/request-worktree",
         success: true,
+        generatedMessage: "Update file",
         error: null,
         requestId: "request-generated-commit",
       },
@@ -2744,6 +2746,7 @@ diff --git a/file.txt b/file.txt
       payload: {
         cwd: "/tmp/request-worktree",
         success: true,
+        generatedMessage: "Update files",
         error: null,
         requestId: "request-generated-commit-fallback",
       },
