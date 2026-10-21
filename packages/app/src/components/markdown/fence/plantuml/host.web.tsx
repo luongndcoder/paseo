@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Pressable, View, type LayoutChangeEvent, type ViewStyle } from "react-native";
+import { View, type LayoutChangeEvent, type ViewStyle } from "react-native";
 import { Code, Workflow } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import { StyleSheet } from "react-native-unistyles";
 import { HighlightedCodeBlock } from "@/components/highlighted-code-block";
+import { ToolbarButton } from "@/components/ui/pane-content-toolbar";
 import { ZoomableViewport } from "@/components/zoomable-viewport";
 import type { MarkdownFenceRendererProps } from "../mermaid/types";
 import { getDiagramBoxStyle } from "../mermaid/presentation";
@@ -113,20 +114,13 @@ export function PlantUmlFenceHost({
             textStyle={textStyle}
           />
           {showSource && loaded ? (
-            <Pressable
-              accessibilityLabel={t("message.diagram.viewDiagram")}
-              accessibilityRole="button"
-              hitSlop={4}
+            <ToolbarButton
+              label={t("message.diagram.viewDiagram")}
               onPress={showDiagramPress}
               style={controlStyles.sourceButton}
             >
-              {({ hovered }) => (
-                <Workflow
-                  size={14}
-                  color={hovered ? controlStyles.iconHovered.color : controlStyles.icon.color}
-                />
-              )}
-            </Pressable>
+              <Workflow size={14} color={controlStyles.icon.color} />
+            </ToolbarButton>
           ) : null}
         </View>
       )}
@@ -194,5 +188,4 @@ const controlStyles = StyleSheet.create((theme) => ({
     padding: theme.spacing[1],
   },
   icon: { color: theme.colors.foregroundMuted },
-  iconHovered: { color: theme.colors.foreground },
 }));
