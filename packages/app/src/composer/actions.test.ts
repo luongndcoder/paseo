@@ -705,6 +705,34 @@ describe("dispatchComposerAgentMessage", () => {
       },
     ]);
   });
+
+  it("retries with interrupt when steer fails because provider does not support prompt.steer", async () => {
+    let callCount = 0;
+    const client: ComposerSendClient = {
+      sendAgentMessage: async (agentId, text, options) => {
+        callCount += 1;
+        if (options.activeTurnBehavior === "steer") {
+          throw new Error("Provider does not support prompt.steer");
+        }
+      },
+      uploadFile: async () => ({ requestId: "r", file: null, error: null }),
+    };
+    const stream = createFakeStream();
+
+    await dispatchComposerAgentMessage({
+      client,
+      agentId: "agent",
+      text: "hello",
+      attachments: [],
+      encodeImages: passthroughEncodeImages,
+      submission: stream,
+      activeTurnBehavior: "steer",
+    });
+
+    expect(callCount).toBe(2);
+    expect(stream.tail.get("agent")).toHaveLength(1);
+    expect(stream.tail.get("agent")?.[0]).toMatchObject({ text: "hello" });
+  });
 });
 
 describe("queueComposerMessage", () => {

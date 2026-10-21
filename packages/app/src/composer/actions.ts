@@ -218,12 +218,29 @@ export async function dispatchComposerAgentMessage(
   input.submission.begin(input.agentId, userMessage);
   try {
     const imagesData = await input.encodeImages(wirePayload.images);
-    await input.client.sendAgentMessage(input.agentId, input.text, {
-      messageId: clientMessageId,
-      ...(input.activeTurnBehavior ? { activeTurnBehavior: input.activeTurnBehavior } : {}),
-      images: imagesData ?? [],
-      attachments: wirePayload.attachments,
-    });
+    try {
+      await input.client.sendAgentMessage(input.agentId, input.text, {
+        messageId: clientMessageId,
+        ...(input.activeTurnBehavior ? { activeTurnBehavior: input.activeTurnBehavior } : {}),
+        images: imagesData ?? [],
+        attachments: wirePayload.attachments,
+      });
+    } catch (error) {
+      if (
+        input.activeTurnBehavior === "steer" &&
+        error instanceof Error &&
+        error.message.includes("prompt.steer")
+      ) {
+        await input.client.sendAgentMessage(input.agentId, input.text, {
+          messageId: clientMessageId,
+          activeTurnBehavior: "interrupt",
+          images: imagesData ?? [],
+          attachments: wirePayload.attachments,
+        });
+      } else {
+        throw error;
+      }
+    }
     input.submission.accept(input.agentId, clientMessageId);
   } catch (error) {
     input.submission.reject(input.agentId, clientMessageId);
