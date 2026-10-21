@@ -51,9 +51,14 @@ function createMockResponse(): MockResponse {
   };
 }
 
-function createMockRequest(input: { body: unknown; remoteAddress?: string }): express.Request {
+function createMockRequest(input: {
+  body: unknown;
+  remoteAddress?: string;
+  headers?: Record<string, string>;
+}): express.Request {
   return {
     body: input.body,
+    headers: input.headers ?? {},
     socket: {
       remoteAddress: input.remoteAddress ?? "127.0.0.1",
     },
@@ -128,6 +133,29 @@ it("rejects non-loopback activity reports before token handling", async () => {
     createMockRequest({
       body: { terminalId: "terminal-1", token: "token", state: "running" },
       remoteAddress: "192.168.1.5",
+    }),
+    response as unknown as express.Response,
+    () => undefined,
+  );
+
+  expect(response.statusCode).toBe(403);
+});
+
+it("judges the edge-forwarded client address, not the edge's loopback peer", async () => {
+  manager = createTerminalManager();
+  const response = createMockResponse();
+  const handler = createTerminalActivityRouteHandler(manager, {
+    token: "edge-token",
+    publicListen: null,
+  });
+
+  await handler(
+    createMockRequest({
+      body: { terminalId: "terminal-1", token: "token", state: "running" },
+      headers: {
+        "x-paseo-edge-token": "edge-token",
+        "x-paseo-edge-remote-addr": "203.0.113.9:5555",
+      },
     }),
     response as unknown as express.Response,
     () => undefined,

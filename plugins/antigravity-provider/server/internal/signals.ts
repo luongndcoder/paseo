@@ -23,7 +23,19 @@ export function signalProcess(options: SignalOptions): void | Promise<void> {
   try {
     process.kill(plan.pid, plan.signal);
   } catch (error) {
-    if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error;
+    if (error instanceof Error && "code" in error) {
+      if (error.code === "ESRCH") return;
+      if (error.code === "EPERM") {
+        // Process group signal failed with EPERM, fallback to direct process pid
+        try {
+          process.kill(options.pid, options.signal);
+        } catch {
+          // Ignore cleanup races or remaining permission errors
+        }
+        return;
+      }
+    }
+    throw error;
   }
 }
 

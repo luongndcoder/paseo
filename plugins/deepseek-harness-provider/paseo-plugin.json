@@ -1,0 +1,9 @@
+{
+  "id": "deepseek-harness-provider",
+  "name": "DeepSeek Harness Provider",
+  "description": "DeepSeek Harness coding agent over ACP (dsh --profile acp) supporting modern V3/V4 models.",
+  "tags": ["deepseek", "dsh", "deepseek-harness", "agent", "provider", "coding-agent"],
+  "requirements": {
+    "paseo": ">=0.11.0"
+  }
+}

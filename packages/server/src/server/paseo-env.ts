@@ -8,6 +8,11 @@ const RUNTIME_CONTROL_ENV_KEYS = [
   ELECTRON_RUN_AS_NODE,
   "ELECTRON_NO_ATTACH_CONSOLE",
   "ESBUILD_BINARY_PATH",
+  // Edge secrets: the token authenticates relay identity against the internal port.
+  "PASEO_EDGE_TOKEN",
+  "PASEO_EDGE_PUBLIC_LISTEN",
+  "PASEO_EDGE_BACKEND_CMD",
+  "PASEO_EDGE_PARENT_STDIN",
 ] as const;
 
 export type PaseoNodeEnv = "development" | "production" | "test";

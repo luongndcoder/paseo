@@ -24,6 +24,7 @@ export const ACP_PROVIDER_ICON_NAMES = [
   "cursor",
   "deepagents",
   "devin",
+  "deepseek-harness",
   "dimcode",
   "dirac",
   "factory-droid",

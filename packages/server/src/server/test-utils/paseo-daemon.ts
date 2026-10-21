@@ -3,6 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 
+import { spawn, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { once } from "node:events";
+import net from "node:net";
+
 import pino from "pino";
 import {
   createPaseoDaemon,
@@ -102,6 +107,7 @@ export async function createTestPaseoDaemon(
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const { config, paseoHomeRoot, paseoHome, staticDir, createdDirs } =
       await prepareTestDaemonConfig(options);
+    const edgeSetup = await prepareEdge(config);
     const logger = options.logger ?? pino({ level: "silent" });
     const daemon = await createPaseoDaemon(config, logger, {
       builtinPlugins: options.builtinPlugins ?? new BuiltinPluginLoader(undefined, []),
@@ -117,7 +123,12 @@ export async function createTestPaseoDaemon(
         throw new Error("Test daemon did not expose a bound TCP listen target");
       }
 
+      const edge = edgeSetup
+        ? await startEdgeInFront({ edgeSetup, paseoHome, internalPort: listenTarget.port })
+        : null;
+
       const close = async (): Promise<void> => {
+        await edge?.stop();
         await daemon.stop().catch(() => undefined);
         await daemon.agentManager.flush().catch(() => undefined);
         if (options.cleanup ?? true) {
@@ -129,7 +140,7 @@ export async function createTestPaseoDaemon(
       return {
         config,
         daemon,
-        port: listenTarget.port,
+        port: edge ? edge.port : listenTarget.port,
         paseoHome,
         staticDir,
         close,
@@ -235,4 +246,104 @@ function isStartupTimeoutError(error: unknown): boolean {
   }
   const record = error as { code?: string };
   return record.code === "TEST_DAEMON_START_TIMEOUT";
+}
+
+// ---------------------------------------------------------------------------
+// Optional Rust edge in front of the in-process daemon (PASEO_EDGE=rust).
+// Off by default; with the flag unset nothing above changes.
+// ---------------------------------------------------------------------------
+
+interface EdgeSetup {
+  binary: string;
+  token: string;
+  publicPort: number;
+}
+
+async function pickFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      server.close(() => resolve(port));
+    });
+  });
+}
+
+async function prepareEdge(config: PaseoDaemonConfig): Promise<EdgeSetup | null> {
+  if (process.env.PASEO_EDGE?.trim().toLowerCase() !== "rust") {
+    return null;
+  }
+  const binary = process.env.PASEO_EDGE_BIN;
+  if (!binary) {
+    throw new Error("PASEO_EDGE=rust requires PASEO_EDGE_BIN for the test daemon harness");
+  }
+  const publicPort = await pickFreePort();
+  const token = randomBytes(24).toString("hex");
+  // The in-process daemon keeps its ephemeral loopback listener as the internal port and
+  // reports the edge's public address, exactly as the worker does behind paseod.
+  config.edgeBackend = { token, publicListen: `127.0.0.1:${publicPort}` };
+  config.relayEnabled = false;
+  return { binary, token, publicPort };
+}
+
+async function startEdgeInFront(input: {
+  edgeSetup: EdgeSetup;
+  paseoHome: string;
+  internalPort: number;
+}): Promise<{ port: number; stop: () => Promise<void> }> {
+  const { edgeSetup } = input;
+  const child: ChildProcess = spawn(edgeSetup.binary, [], {
+    env: {
+      ...process.env,
+      PASEO_HOME: input.paseoHome,
+      PASEO_LISTEN: `127.0.0.1:${edgeSetup.publicPort}`,
+      PASEO_EDGE_ATTACH: `127.0.0.1:${input.internalPort}`,
+      PASEO_EDGE_TOKEN: edgeSetup.token,
+      PASEO_RELAY_ENABLED: "false",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const stop = async (): Promise<void> => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      return;
+    }
+    const exited = once(child, "exit");
+    const killTimer = setTimeout(() => child.kill("SIGKILL"), 3_000);
+    child.kill("SIGTERM");
+    await exited;
+    clearTimeout(killTimer);
+  };
+  try {
+    let stderr = "";
+    let stdoutBuffer = "";
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    const ready = new Promise<void>((resolve) => {
+      child.stdout?.on("data", (chunk: Buffer) => {
+        stdoutBuffer += chunk.toString();
+        if (stdoutBuffer.includes("paseo:ready")) {
+          resolve();
+        }
+      });
+    });
+    const failed = new Promise<never>((_, reject) => {
+      const timer = setTimeout(() => reject(new Error(`paseod not ready: ${stderr}`)), 10_000);
+      child.once("exit", (code) => {
+        clearTimeout(timer);
+        reject(new Error(`paseod exited ${code} before ready: ${stderr}`));
+      });
+      void ready.then(() => clearTimeout(timer));
+    });
+    await Promise.race([ready, failed]);
+  } catch (error) {
+    await stop();
+    throw error;
+  }
+  // Keep draining so the pipe never blocks the edge.
+  child.stdout?.resume();
+  child.stderr?.resume();
+  return { port: edgeSetup.publicPort, stop };
 }
