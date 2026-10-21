@@ -114,6 +114,9 @@ export interface WorkspaceSessionHost {
     workspace: PersistedWorkspaceRecord,
     project: PersistedProjectRecord | null,
   ): WorkspaceDescriptorPayload["scripts"];
+  getWorkspaceSetupStatus(
+    workspace: PersistedWorkspaceRecord,
+  ): WorkspaceDescriptorPayload["setupStatus"];
 }
 
 export interface WorkspaceSessionOptions {
@@ -611,6 +614,7 @@ export class WorkspaceSession {
       projectCustomIconRevision: resolvedProjectRecord?.customIconRevision ?? null,
       projectRootPath: resolvedProjectRecord?.rootPath ?? workspace.cwd,
       workspaceDirectory: workspace.cwd,
+      setupStatus: this.host.getWorkspaceSetupStatus(workspace),
       worktreeSlug,
       projectKind: (resolvedProjectRecord?.kind ?? "directory") === "git" ? "git" : "non_git",
       workspaceKind: workspace.kind,
@@ -704,6 +708,7 @@ export class WorkspaceSession {
       projectCustomIconRevision: projectRecord?.customIconRevision ?? null,
       projectRootPath: projectRecord?.rootPath ?? result.repoRoot,
       workspaceDirectory: result.workspace.cwd,
+      setupStatus: this.host.getWorkspaceSetupStatus(result.workspace),
       worktreeSlug: basename(result.worktree.worktreePath),
       projectKind: projectRecord?.kind ?? "git",
       workspaceKind: result.workspace.kind,

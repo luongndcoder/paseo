@@ -1128,6 +1128,7 @@ export class Session {
           this.buildProjectPlacementForWorkspace(workspace, projectRecord),
         buildWorkspaceScriptPayloadSnapshot: (workspace, project) =>
           this.buildWorkspaceScriptPayloadSnapshot(workspace, project),
+        getWorkspaceSetupStatus: (workspace) => this.workspaceSetupObservation.status(workspace),
       },
       delivery: this.delivery,
       projectRegistry: this.projectRegistry,

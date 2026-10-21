@@ -15,6 +15,7 @@ function createSession(overrides: Partial<WorkspaceSessionOptions> = {}) {
       emitProjectUpdate: vi.fn(),
       buildProjectPlacementForWorkspace: vi.fn(),
       buildWorkspaceScriptPayloadSnapshot: vi.fn(),
+      getWorkspaceSetupStatus: () => null,
     },
     projectRegistry: { get: vi.fn().mockResolvedValue(null) },
     workspaceRegistry: { list: vi.fn().mockResolvedValue([]) },
