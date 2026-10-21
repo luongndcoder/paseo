@@ -585,3 +585,40 @@ it("closes every dictation stream when one provider cleanup fails", async () => 
   expect(second.closed).toBe(true);
   expect(manager.hasDemand).toBe(false);
 });
+
+describe("DictationStreamManager silence threshold env", () => {
+  const original = process.env.PASEO_DICTATION_SILENCE_PEAK_THRESHOLD;
+  afterEach(() => {
+    if (original === undefined) {
+      delete process.env.PASEO_DICTATION_SILENCE_PEAK_THRESHOLD;
+    } else {
+      process.env.PASEO_DICTATION_SILENCE_PEAK_THRESHOLD = original;
+    }
+    vi.resetModules();
+  });
+
+  it("falls back to the default threshold when the env value is malformed", async () => {
+    process.env.PASEO_DICTATION_SILENCE_PEAK_THRESHOLD = "not-a-number";
+    vi.resetModules();
+    const { DictationStreamManager: Manager } = await import("./dictation-stream-manager.js");
+    const session = new FakeRealtimeSession();
+    const manager = new Manager({
+      logger: pino({ level: "silent" }),
+      emit: () => undefined,
+      sessionId: "s1",
+      stt: new FakeSttProvider(session),
+      autoCommitSeconds: 1,
+    });
+
+    await manager.handleStart("d-nan", "audio/pcm;rate=24000;bits=16");
+    await manager.handleChunk({
+      dictationId: "d-nan",
+      seq: 0,
+      audioBase64: buildPcmBase64(0, 24000),
+      format: "audio/pcm;rate=24000;bits=16",
+    });
+
+    expect(session.clearCalls).toBe(1);
+    expect(session.commitCalls).toBe(0);
+  });
+});
