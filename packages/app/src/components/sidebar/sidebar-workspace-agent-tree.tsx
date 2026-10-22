@@ -614,6 +614,9 @@ interface SidebarSubagentTreeStoreState {
   collapsedByWorkspaceKey: Record<string, boolean | undefined>;
   toggleWorkspaceSubagents: (workspaceKey: string, currentCollapsed: boolean) => void;
   setWorkspaceSubagentsCollapsed: (workspaceKey: string, collapsed: boolean) => void;
+  /** Per-workspace "show only the subagents that are still working" switch. */
+  workingOnlyByWorkspaceKey: Record<string, boolean | undefined>;
+  toggleWorkingOnlySubagents: (workspaceKey: string) => void;
 }
 
 export const useSidebarSubagentTreeStore = create<SidebarSubagentTreeStoreState>((set) => ({
@@ -630,6 +633,14 @@ export const useSidebarSubagentTreeStore = create<SidebarSubagentTreeStoreState>
       collapsedByWorkspaceKey: {
         ...state.collapsedByWorkspaceKey,
         [workspaceKey]: collapsed,
+      },
+    })),
+  workingOnlyByWorkspaceKey: {},
+  toggleWorkingOnlySubagents: (workspaceKey) =>
+    set((state) => ({
+      workingOnlyByWorkspaceKey: {
+        ...state.workingOnlyByWorkspaceKey,
+        [workspaceKey]: !state.workingOnlyByWorkspaceKey[workspaceKey],
       },
     })),
 }));
@@ -913,6 +924,90 @@ export const WorkspaceAgentMetaRow = memo(function WorkspaceAgentMetaRow({
 
 const ARCHIVED_SUBAGENTS_LIMIT = 5;
 
+export interface PartitionSubagentRowsOptions {
+  showAllArchived: boolean;
+  activeTargetKey: string | null;
+  /** "Working only" hides everything that is done: no finished rows and no older toggle. */
+  hideFinished?: boolean;
+}
+
+export interface PartitionedSubagentRows {
+  visibleActiveSubagents: SubagentRow[];
+  visibleArchivedSubagents: SubagentRow[];
+  hiddenArchivedCount: number;
+  totalArchivedCount: number;
+}
+
+/**
+ * Splits the rows into the working group on top and the finished group below, capping the
+ * finished group at the newest entries with a toggle for the older ones. Pure so it is testable;
+ * the tree reads it through a memo.
+ */
+export function partitionSubagentRows(
+  rows: readonly SubagentRow[],
+  options: PartitionSubagentRowsOptions,
+): PartitionedSubagentRows {
+  const { showAllArchived, activeTargetKey, hideFinished = false } = options;
+  const active: SubagentRow[] = [];
+  const archived: SubagentRow[] = [];
+
+  for (const row of rows) {
+    if (isRowActive(row)) {
+      active.push(row);
+    } else {
+      archived.push(row);
+    }
+  }
+
+  // Active subagents sorted chronologically
+  active.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  // Archived subagents sorted chronologically
+  archived.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+
+  // "Working only" hides everything that is done, so a busy workspace shows only the agents
+  // that still need attention. The total stays so the switch itself stays visible.
+  if (hideFinished) {
+    return {
+      visibleActiveSubagents: active,
+      visibleArchivedSubagents: [],
+      hiddenArchivedCount: 0,
+      totalArchivedCount: archived.length,
+    };
+  }
+
+  if (archived.length <= ARCHIVED_SUBAGENTS_LIMIT || showAllArchived) {
+    return {
+      visibleActiveSubagents: active,
+      visibleArchivedSubagents: archived,
+      hiddenArchivedCount: 0,
+      totalArchivedCount: archived.length,
+    };
+  }
+
+  // Take the 5 newest archived (at the end of chronologically sorted list)
+  const newestArchived = archived.slice(-ARCHIVED_SUBAGENTS_LIMIT);
+  const hiddenCount = archived.length - ARCHIVED_SUBAGENTS_LIMIT;
+
+  // Keep active selected row visible even if it's an older archived row
+  if (activeTargetKey) {
+    const selectedArchived = archived.slice(0, -ARCHIVED_SUBAGENTS_LIMIT).find((r) => {
+      const key = r.kind === "paseo" ? `paseo:${r.id}` : `provider:${r.parentAgentId}:${r.id}`;
+      return key === activeTargetKey;
+    });
+    if (selectedArchived && !newestArchived.some((r) => r.id === selectedArchived.id)) {
+      newestArchived.unshift(selectedArchived);
+      newestArchived.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    }
+  }
+
+  return {
+    visibleActiveSubagents: active,
+    visibleArchivedSubagents: newestArchived,
+    hiddenArchivedCount: hiddenCount,
+    totalArchivedCount: archived.length,
+  };
+}
+
 /**
  * Whether the row is still working. The badge and the row's icon read the agent's effective
  * status, so the tree must read the same one: an agent the daemon closed, or one it left in
@@ -1002,60 +1097,29 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
     ),
   );
 
+  const workingOnly =
+    useSidebarSubagentTreeStore((state) => state.workingOnlyByWorkspaceKey[resolvedWorkspaceKey]) ??
+    false;
+  const toggleWorkingOnlySubagents = useSidebarSubagentTreeStore(
+    (state) => state.toggleWorkingOnlySubagents,
+  );
+  const handleToggleWorkingOnly = useCallback(() => {
+    toggleWorkingOnlySubagents(resolvedWorkspaceKey);
+  }, [toggleWorkingOnlySubagents, resolvedWorkspaceKey]);
   const {
     visibleActiveSubagents,
-    visibleArchivedSubagents,
-    hiddenArchivedCount,
+    visibleArchivedSubagents: shownArchivedSubagents,
+    hiddenArchivedCount: shownHiddenArchivedCount,
     totalArchivedCount,
-  } = useMemo(() => {
-    const active: SubagentRow[] = [];
-    const archived: SubagentRow[] = [];
-
-    for (const row of summary.subagents) {
-      if (isRowActive(row)) {
-        active.push(row);
-      } else {
-        archived.push(row);
-      }
-    }
-
-    // Active subagents sorted chronologically
-    active.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
-    // Archived subagents sorted chronologically
-    archived.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
-
-    if (archived.length <= ARCHIVED_SUBAGENTS_LIMIT || showAllArchived) {
-      return {
-        visibleActiveSubagents: active,
-        visibleArchivedSubagents: archived,
-        hiddenArchivedCount: 0,
-        totalArchivedCount: archived.length,
-      };
-    }
-
-    // Take the 5 newest archived (at the end of chronologically sorted list)
-    const newestArchived = archived.slice(-ARCHIVED_SUBAGENTS_LIMIT);
-    const hiddenCount = archived.length - ARCHIVED_SUBAGENTS_LIMIT;
-
-    // Keep active selected row visible even if it's an older archived row
-    if (activeTargetKey) {
-      const selectedArchived = archived.slice(0, -ARCHIVED_SUBAGENTS_LIMIT).find((r) => {
-        const key = r.kind === "paseo" ? `paseo:${r.id}` : `provider:${r.parentAgentId}:${r.id}`;
-        return key === activeTargetKey;
-      });
-      if (selectedArchived && !newestArchived.some((r) => r.id === selectedArchived.id)) {
-        newestArchived.unshift(selectedArchived);
-        newestArchived.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
-      }
-    }
-
-    return {
-      visibleActiveSubagents: active,
-      visibleArchivedSubagents: newestArchived,
-      hiddenArchivedCount: hiddenCount,
-      totalArchivedCount: archived.length,
-    };
-  }, [activeTargetKey, showAllArchived, summary.subagents]);
+  } = useMemo(
+    () =>
+      partitionSubagentRows(summary.subagents, {
+        showAllArchived,
+        activeTargetKey,
+        hideFinished: workingOnly,
+      }),
+    [activeTargetKey, showAllArchived, summary.subagents, workingOnly],
+  );
 
   if (workspace.archivingAt !== null || summary.subagents.length === 0 || isCollapsed) {
     return null;
@@ -1072,6 +1136,11 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
         onMouseDown: (e: { stopPropagation?: () => void }) => e.stopPropagation?.(),
       } as object)}
     >
+      {/* Working-only switch: hides everything that is done, so a busy workspace shows only
+          the agents that still need attention. Offered once there is anything done to hide. */}
+      {totalArchivedCount > 0 ? (
+        <WorkingOnlyToggle workingOnly={workingOnly} onToggle={handleToggleWorkingOnly} />
+      ) : null}
       {/* 1. Working / Active subagents on top */}
       {visibleActiveSubagents.map((row) => {
         const rowTargetKey =
@@ -1089,10 +1158,10 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
       })}
 
       {/* 2. Toggle button for older archived subagents */}
-      {hiddenArchivedCount > 0 ? (
+      {shownHiddenArchivedCount > 0 ? (
         <PressHighlight
           accessibilityRole="button"
-          accessibilityLabel={`Show ${hiddenArchivedCount} older archived subagents`}
+          accessibilityLabel={`Show ${shownHiddenArchivedCount} older archived subagents`}
           onPress={handleShowAllArchived}
           style={[styles.treeToggleMoreRow, isToggleHovered && styles.treeToggleMoreRowHovered]}
           {...({
@@ -1101,11 +1170,12 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
           } as object)}
         >
           <ChevronRight size={10} color="#94a3b8" />
-          <Text style={styles.treeToggleMoreText}>+{hiddenArchivedCount} older archived</Text>
+          <Text style={styles.treeToggleMoreText}>+{shownHiddenArchivedCount} older archived</Text>
         </PressHighlight>
       ) : null}
-      {hiddenArchivedCount === 0 &&
+      {shownHiddenArchivedCount === 0 &&
       showAllArchived &&
+      !workingOnly &&
       totalArchivedCount > ARCHIVED_SUBAGENTS_LIMIT ? (
         <PressHighlight
           accessibilityRole="button"
@@ -1123,7 +1193,7 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
       ) : null}
 
       {/* 3. Archived / Completed subagents below */}
-      {visibleArchivedSubagents.map((row) => {
+      {shownArchivedSubagents.map((row) => {
         const rowTargetKey =
           row.kind === "paseo" ? `paseo:${row.id}` : `provider:${row.parentAgentId}:${row.id}`;
         return (
@@ -1138,6 +1208,36 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
         );
       })}
     </View>
+  );
+});
+
+const WorkingOnlyToggle = memo(function WorkingOnlyToggle({
+  workingOnly,
+  onToggle,
+}: {
+  workingOnly: boolean;
+  onToggle: () => void;
+}) {
+  const [isHovered, setIsHovered] = useState(false);
+  const handleMouseEnter = useCallback(() => {
+    setIsHovered(true);
+  }, []);
+  const handleMouseLeave = useCallback(() => {
+    setIsHovered(false);
+  }, []);
+  return (
+    <PressHighlight
+      accessibilityRole="button"
+      accessibilityLabel={workingOnly ? "Show all subagents" : "Show only working subagents"}
+      onPress={onToggle}
+      style={[styles.treeToggleMoreRow, isHovered && styles.treeToggleMoreRowHovered]}
+      {...({
+        onMouseEnter: handleMouseEnter,
+        onMouseLeave: handleMouseLeave,
+      } as object)}
+    >
+      <Text style={styles.treeToggleMoreText}>{workingOnly ? "Show all" : "Working only"}</Text>
+    </PressHighlight>
   );
 });
 
