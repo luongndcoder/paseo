@@ -31,7 +31,7 @@ export interface DirectorySuggestionResult {
 
 export type GetDirectorySuggestions = (input: {
   query: string;
-  cwd: string;
+  cwd?: string;
   includeFiles: true;
   includeDirectories: false;
   matchMode: "suffix";
@@ -57,6 +57,7 @@ export interface FetchDaemonResolutionInput {
   token: string;
   target: InlinePathTarget;
   workspaceRoot?: string;
+  fallbackDirectories?: readonly string[];
   getDirectorySuggestions: GetDirectorySuggestions;
 }
 
@@ -72,6 +73,7 @@ export async function fetchDaemonResolution({
   token,
   target,
   workspaceRoot,
+  fallbackDirectories,
   getDirectorySuggestions,
 }: FetchDaemonResolutionInput): Promise<InlinePathTarget> {
   const trimmedRoot = workspaceRoot?.trim();
@@ -79,29 +81,60 @@ export async function fetchDaemonResolution({
     throw new UnresolvedFileLinkError(token);
   }
 
-  let suggestions: DirectorySuggestionResult;
-  try {
-    suggestions = await getDirectorySuggestions({
+  const workspacePath = await findFileInDirectory({
+    directory: trimmedRoot,
+    query: ambiguousQuery,
+    getDirectorySuggestions,
+  });
+  if (workspacePath) {
+    return { ...target, path: workspacePath };
+  }
+
+  // Bases are tried in order so the first mentioned directory that holds the file wins.
+  for (const directory of fallbackDirectories ?? []) {
+    const path = await findFileInDirectory({
+      directory,
       query: ambiguousQuery,
-      cwd: trimmedRoot,
+      getDirectorySuggestions,
+    });
+    if (path) {
+      return { ...target, path };
+    }
+  }
+
+  throw new UnresolvedFileLinkError(token);
+}
+
+async function findFileInDirectory(input: {
+  directory: string;
+  query: string;
+  getDirectorySuggestions: GetDirectorySuggestions;
+}): Promise<string | null> {
+  const isHomeRelative = input.directory === "~" || input.directory.startsWith("~/");
+  const query = input.query.replace(/\\/g, "/").replace(/^\.\//, "");
+  try {
+    // The daemon only expands `~` for home-rooted queries (no cwd), and then answers with
+    // absolute paths. Absolute directories are searched as a cwd and answered relatively.
+    const suggestions = await input.getDirectorySuggestions({
+      query: isHomeRelative ? `${input.directory.replace(/\/+$/, "")}/${query}` : query,
+      ...(isHomeRelative ? {} : { cwd: input.directory }),
       includeFiles: true,
       includeDirectories: false,
       matchMode: "suffix",
       limit: 1,
     });
+    const match = suggestions.entries.find((entry) => entry.kind === "file");
+    if (!match || suggestions.error) {
+      return null;
+    }
+    if (isHomeRelative) {
+      const absolute = match.path.replace(/\\/g, "/");
+      return absolute.endsWith(`/${query}`) ? absolute : null;
+    }
+    return joinWorkspacePath(input.directory.trim(), match.path);
   } catch {
-    throw new UnresolvedFileLinkError(token);
+    return null;
   }
-
-  const match = suggestions.entries.find((entry) => entry.kind === "file");
-  if (!match || suggestions.error) {
-    throw new UnresolvedFileLinkError(token);
-  }
-
-  return {
-    ...target,
-    path: joinWorkspacePath(trimmedRoot, match.path),
-  };
 }
 
 export function classifyForResolution(

@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useLayoutEffect,
   useMemo,
   useRef,
   type MutableRefObject,
@@ -22,6 +23,8 @@ export interface AssistantFileLinkResolverConfig {
   client?: AssistantFileLinkDaemonClient | null;
   serverId?: string;
   workspaceRoot?: string;
+  // Text of the assistant message the links belong to; mentioned directories are fallback bases.
+  messageText?: string;
   onOpenWorkspaceFile?: (target: InlinePathTarget, disposition: OpenFileDisposition) => void;
   toast?: ToastApi | null;
 }
@@ -31,6 +34,7 @@ export interface AssistantFileLinkResolverProviderProps extends AssistantFileLin
 }
 
 export interface AssistantFileLinkResolverContextValue {
+  config: AssistantFileLinkResolverConfig;
   configRef: MutableRefObject<AssistantFileLinkResolverConfig>;
   getDirectorySuggestions: GetDirectorySuggestions;
 }
@@ -42,18 +46,20 @@ export function AssistantFileLinkResolverProvider({
   client,
   serverId,
   workspaceRoot,
+  messageText,
   onOpenWorkspaceFile,
   toast,
   children,
 }: AssistantFileLinkResolverProviderProps) {
-  const configRef = useRef<AssistantFileLinkResolverConfig>({
-    client,
-    serverId,
-    workspaceRoot,
-    onOpenWorkspaceFile,
-    toast,
-  });
-  configRef.current = { client, serverId, workspaceRoot, onOpenWorkspaceFile, toast };
+  const config = useMemo<AssistantFileLinkResolverConfig>(
+    () => ({ client, serverId, workspaceRoot, messageText, onOpenWorkspaceFile, toast }),
+    [client, serverId, workspaceRoot, messageText, onOpenWorkspaceFile, toast],
+  );
+  // Render reads go through `config`; async handlers read the latest committed config via the ref.
+  const configRef = useRef<AssistantFileLinkResolverConfig>(config);
+  useLayoutEffect(() => {
+    configRef.current = config;
+  }, [config]);
 
   const getDirectorySuggestions = useCallback<GetDirectorySuggestions>(async (input) => {
     const activeClient = configRef.current.client;
@@ -66,8 +72,8 @@ export function AssistantFileLinkResolverProvider({
   }, []);
 
   const value = useMemo<AssistantFileLinkResolverContextValue>(
-    () => ({ configRef, getDirectorySuggestions }),
-    [getDirectorySuggestions],
+    () => ({ config, configRef, getDirectorySuggestions }),
+    [config, getDirectorySuggestions],
   );
 
   return (
@@ -85,6 +91,7 @@ export function useAssistantFileLinkResolverContext(): AssistantFileLinkResolver
 export type { AssistantFileLinkContext };
 
 const EMPTY_CONTEXT: AssistantFileLinkResolverContextValue = {
+  config: {},
   configRef: { current: {} },
   getDirectorySuggestions: async () => ({ entries: [], error: null }),
 };
