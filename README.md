@@ -70,7 +70,7 @@ This custom fork (`luongndcoder/paseo`) introduces high-productivity extensions 
   - Comprehensive stash stack inspector (`apply`, `pop`, `drop`, `branch`).
 - 📊 **PlantUML Live Preview**: Native rendering of `.puml` files and embedded Markdown diagrams.
 - 🤖 **SLP Multi-Agent Orchestration (`paseo-slp`)**: Hierarchical coordination with Supervisor, Lead Planner, Peer Builders, and deterministic verification tools (`slp-verify`, `slp-evidence`).
-- 🔄 **ZeroSub Account Rotation (`zerosub`)**: Automatic failover across multiple Claude Code and Codex API profiles to prevent quota interruption.
+- 🔄 **ZeroSub Account Rotation (`zerosub`)**: Automatic failover across multiple Claude Code, Codex and OpenCode (Go/Zen) API profiles to prevent quota interruption.
 
 ---
 
