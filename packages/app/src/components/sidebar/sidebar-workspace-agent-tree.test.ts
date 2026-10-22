@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { SubagentRow } from "@/subagents/select";
-import { isRowActive, partitionSubagentRows } from "./sidebar-workspace-agent-tree";
+import {
+  buildRowSections,
+  compareSubagentRows,
+  deriveSubagentRole,
+  isRowActive,
+  partitionSubagentRows,
+} from "./sidebar-workspace-agent-tree";
 
 function paseoRow(overrides: Partial<Extract<SubagentRow, { kind: "paseo" }>> = {}) {
   return {
@@ -126,5 +132,82 @@ describe("partitionSubagentRows", () => {
     expect(part.hiddenArchivedCount).toBe(0);
     // The total stays so the switch itself stays visible.
     expect(part.totalArchivedCount).toBe(2);
+  });
+});
+
+describe("deriveSubagentRole", () => {
+  const roleOf = (provider: string) =>
+    deriveSubagentRole(paseoRow({ provider, address: { serverId: "s", agentId: "a" } }));
+
+  it("reads the SLP seat from the provider id", () => {
+    expect(roleOf("slp-supervisor")).toBe("supervisor");
+    expect(roleOf("slp-lead")).toBe("lead");
+    expect(roleOf("slp-opencode-builder")).toBe("builder");
+    expect(roleOf("slp-claude-builder")).toBe("builder");
+    expect(roleOf("slp-claude-checker")).toBe("checker");
+    expect(roleOf("slp-claude-final-reviewer")).toBe("checker");
+    expect(roleOf("slp-claude-advisor")).toBe("checker");
+  });
+
+  it("leaves ordinary providers seatless", () => {
+    expect(roleOf("claude")).toBeNull();
+    expect(roleOf("opencode")).toBeNull();
+  });
+});
+
+describe("buildRowSections", () => {
+  const row = (id: string, provider: string, at: number, running = false) =>
+    paseoRow({
+      id,
+      address: { serverId: "s", agentId: id },
+      provider,
+      createdAt: new Date(at),
+      ...(running
+        ? {
+            status: "running",
+            turn: { phase: "open", turnId: null, startedAt: null, cancellationRequestId: null },
+          }
+        : {}),
+    });
+
+  it("orders seats Lead, then Builders, then Checkers, oldest first inside a seat", () => {
+    const rows = [
+      row("check-new", "slp-claude-checker", 3),
+      row("build-old", "slp-opencode-builder", 1),
+      row("lead", "slp-lead", 0, true),
+      row("build-new", "slp-opencode-builder", 2),
+      row("check-old", "slp-claude-checker", 0),
+      row("plain", "claude", 0),
+    ];
+    const sorted = [...rows].sort(compareSubagentRows);
+    expect(sorted.map((entry) => entry.id)).toEqual([
+      "lead",
+      "build-old",
+      "build-new",
+      "check-old",
+      "check-new",
+      "plain",
+    ]);
+    const sections = buildRowSections(sorted);
+    expect(
+      sections.map((section) =>
+        section.kind === "header" ? `H:${section.label}` : `R:${section.row.id}`,
+      ),
+    ).toEqual([
+      "R:lead",
+      "H:Builders · 2",
+      "R:build-old",
+      "R:build-new",
+      "H:Checkers · 2",
+      "R:check-old",
+      "R:check-new",
+      "R:plain",
+    ]);
+  });
+
+  it("skips the header for a lone row", () => {
+    const sections = buildRowSections([row("only", "slp-lead", 0, true)]);
+    expect(sections).toHaveLength(1);
+    expect(sections[0]?.kind).toBe("row");
   });
 });

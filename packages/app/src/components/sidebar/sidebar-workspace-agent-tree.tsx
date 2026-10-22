@@ -938,6 +938,92 @@ export interface PartitionedSubagentRows {
   totalArchivedCount: number;
 }
 
+export type SubagentRole = "supervisor" | "lead" | "builder" | "checker";
+
+export const SUBAGENT_ROLE_LABEL: Record<SubagentRole, string> = {
+  supervisor: "Supervisor",
+  lead: "Lead",
+  builder: "Builder",
+  checker: "Checker",
+};
+
+const SUBAGENT_ROLE_RANK: Record<SubagentRole, number> = {
+  supervisor: 0,
+  lead: 1,
+  builder: 2,
+  checker: 3,
+};
+
+/**
+ * Which SLP seat a row holds, read from its provider id (`slp-lead`, `slp-opencode-builder`,
+ * `slp-claude-checker`, `slp-final-reviewer` …). Checkers, reviewers and advisors all verify
+ * someone else's work, so they share the Checker seat. Non-SLP rows have no seat.
+ */
+export function deriveSubagentRole(row: SubagentRow): SubagentRole | null {
+  if (row.kind !== "paseo") return null;
+  const provider = row.provider.toLowerCase();
+  if (provider.includes("supervisor")) return "supervisor";
+  if (provider.includes("lead")) return "lead";
+  if (provider.includes("builder")) return "builder";
+  if (provider.includes("checker") || provider.includes("reviewer") || provider.includes("advisor"))
+    return "checker";
+  return null;
+}
+
+export function subagentRoleRank(row: SubagentRow): number {
+  const role = deriveSubagentRole(row);
+  return role === null ? 4 : SUBAGENT_ROLE_RANK[role];
+}
+
+/** Seats read top-down; oldest first inside a seat. */
+export function compareSubagentRows(a: SubagentRow, b: SubagentRow): number {
+  return subagentRoleRank(a) - subagentRoleRank(b) || a.createdAt.getTime() - b.createdAt.getTime();
+}
+
+export type SubagentRowSection =
+  | { kind: "header"; key: string; role: SubagentRole | null; label: string; count: number }
+  | { kind: "row"; key: string; row: SubagentRow };
+
+function sectionLabel(role: SubagentRole | null, count: number): string {
+  if (role === null) return `Others · ${count}`;
+  return `${SUBAGENT_ROLE_LABEL[role]}s · ${count}`;
+}
+
+/**
+ * Splits a visible row list into seat sections (Lead, then Builders, then Checkers, then the
+ * rest), oldest first inside each seat. A section earns its header once it holds more than one
+ * row; single rows read fine without one.
+ */
+export function buildRowSections(rows: readonly SubagentRow[]): SubagentRowSection[] {
+  const groups = new Map<SubagentRole | null, SubagentRow[]>();
+  for (const row of rows) {
+    const role = deriveSubagentRole(row);
+    const group = groups.get(role);
+    if (group) group.push(row);
+    else groups.set(role, [row]);
+  }
+  const orderedRoles = [...groups.keys()].sort(
+    (a, b) => (a === null ? 4 : SUBAGENT_ROLE_RANK[a]) - (b === null ? 4 : SUBAGENT_ROLE_RANK[b]),
+  );
+  const sections: SubagentRowSection[] = [];
+  for (const role of orderedRoles) {
+    const group = groups.get(role) ?? [];
+    if (group.length > 1) {
+      sections.push({
+        kind: "header",
+        key: `section-${role ?? "other"}`,
+        role,
+        label: sectionLabel(role, group.length),
+        count: group.length,
+      });
+    }
+    for (const row of group) {
+      sections.push({ kind: "row", key: `${row.kind}_${row.id}`, row });
+    }
+  }
+  return sections;
+}
+
 /**
  * Splits the rows into the working group on top and the finished group below, capping the
  * finished group at the newest entries with a toggle for the older ones. Pure so it is testable;
@@ -959,10 +1045,9 @@ export function partitionSubagentRows(
     }
   }
 
-  // Active subagents sorted chronologically
-  active.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
-  // Archived subagents sorted chronologically
-  archived.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  // Seats read top-down (Supervisor, Lead, Builders, Checkers), oldest first inside a seat.
+  active.sort(compareSubagentRows);
+  archived.sort(compareSubagentRows);
 
   // "Working only" hides everything that is done, so a busy workspace shows only the agents
   // that still need attention. The total stays so the switch itself stays visible.
@@ -996,7 +1081,7 @@ export function partitionSubagentRows(
     });
     if (selectedArchived && !newestArchived.some((r) => r.id === selectedArchived.id)) {
       newestArchived.unshift(selectedArchived);
-      newestArchived.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+      newestArchived.sort(compareSubagentRows);
     }
   }
 
@@ -1141,21 +1226,14 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
       {totalArchivedCount > 0 ? (
         <WorkingOnlyToggle workingOnly={workingOnly} onToggle={handleToggleWorkingOnly} />
       ) : null}
-      {/* 1. Working / Active subagents on top */}
-      {visibleActiveSubagents.map((row) => {
-        const rowTargetKey =
-          row.kind === "paseo" ? `paseo:${row.id}` : `provider:${row.parentAgentId}:${row.id}`;
-        return (
-          <SidebarSubagentTreeItem
-            key={`${row.kind}_${row.id}`}
-            workspace={workspace}
-            row={row}
-            parentProvider={parentProvider}
-            isSelected={activeTargetKey === rowTargetKey}
-            getProviderIcon={getProviderIcon}
-          />
-        );
-      })}
+      {/* 1. Working / Active subagents on top, grouped by seat */}
+      <SubagentTreeRows
+        rows={visibleActiveSubagents}
+        workspace={workspace}
+        parentProvider={parentProvider}
+        activeTargetKey={activeTargetKey}
+        getProviderIcon={getProviderIcon}
+      />
 
       {/* 2. Toggle button for older archived subagents */}
       {shownHiddenArchivedCount > 0 ? (
@@ -1192,13 +1270,54 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
         </PressHighlight>
       ) : null}
 
-      {/* 3. Archived / Completed subagents below */}
-      {shownArchivedSubagents.map((row) => {
+      {/* 3. Archived / Completed subagents below, grouped by seat */}
+      <SubagentTreeRows
+        rows={shownArchivedSubagents}
+        workspace={workspace}
+        parentProvider={parentProvider}
+        activeTargetKey={activeTargetKey}
+        getProviderIcon={getProviderIcon}
+      />
+    </View>
+  );
+});
+
+/**
+ * One flat row list rendered as seat sections (Lead, Builders, Checkers …), oldest first
+ * inside a seat. Sections earn a header once they hold more than one row.
+ */
+const SubagentTreeRows = memo(function SubagentTreeRows({
+  rows,
+  workspace,
+  parentProvider,
+  activeTargetKey,
+  getProviderIcon,
+}: {
+  rows: readonly SubagentRow[];
+  workspace: SidebarWorkspaceEntry;
+  parentProvider: string | null;
+  activeTargetKey: string | null;
+  getProviderIcon: ReturnType<typeof useProviderIcons>;
+}) {
+  const sections = useMemo(() => buildRowSections(rows), [rows]);
+  return (
+    <>
+      {sections.map((section) => {
+        if (section.kind === "header") {
+          return (
+            <View key={section.key} style={styles.treeSectionHeader}>
+              <Text style={styles.treeSectionLabel} numberOfLines={1}>
+                {section.label}
+              </Text>
+            </View>
+          );
+        }
+        const { row } = section;
         const rowTargetKey =
           row.kind === "paseo" ? `paseo:${row.id}` : `provider:${row.parentAgentId}:${row.id}`;
         return (
           <SidebarSubagentTreeItem
-            key={`${row.kind}_${row.id}`}
+            key={section.key}
             workspace={workspace}
             row={row}
             parentProvider={parentProvider}
@@ -1207,7 +1326,7 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
           />
         );
       })}
-    </View>
+    </>
   );
 });
 
@@ -1273,6 +1392,9 @@ const SidebarSubagentTreeItem = memo(function SidebarSubagentTreeItem({
       }
       return "Task";
     }
+    // SLP seats read as Lead / Builder / Checker instead of the long profile id.
+    const role = deriveSubagentRole(row);
+    if (role) return SUBAGENT_ROLE_LABEL[role];
     return formatShortProviderName(row.provider);
   }, [row]);
 
@@ -1562,6 +1684,22 @@ const styles = StyleSheet.create((theme) => ({
     lineHeight: 13,
     fontFamily: theme.fontFamily.ui,
     color: theme.colors.foregroundMuted,
+  },
+  treeSectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 4,
+    marginLeft: 4,
+    marginTop: 5,
+  },
+  treeSectionLabel: {
+    fontSize: 9,
+    lineHeight: 12,
+    fontFamily: theme.fontFamily.ui,
+    fontWeight: "700",
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+    color: theme.colors.foregroundExtraMuted,
   },
   treeItemRow: {
     flexDirection: "row",
