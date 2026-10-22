@@ -15,6 +15,7 @@ function row(
     kind: "paseo",
     address: overrides.address ?? { serverId: "server-1", agentId: overrides.id },
     id: overrides.id,
+    parentAgentId: overrides.parentAgentId ?? null,
     provider: overrides.provider ?? "codex",
     title: overrides.title ?? `Agent ${overrides.id}`,
     description: null,

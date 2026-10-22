@@ -7,6 +7,7 @@ function paseo(id: string, status: PaseoSubagentRow["status"] = "idle"): PaseoSu
     kind: "paseo",
     address: { serverId: "server-1", agentId: id },
     id,
+    parentAgentId: null,
     provider: "codex",
     title: id,
     description: null,

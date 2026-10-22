@@ -12,6 +12,8 @@ export interface PaseoSubagentRow {
   kind: "paseo";
   address: AgentAddress;
   id: Agent["id"];
+  /** The agent that spawned this one, from its labels; null for workspace roots. */
+  parentAgentId: string | null;
   provider: Agent["provider"];
   title: Agent["title"];
   /** Managed agents have a real title, so the union's task line is always absent for them. */
@@ -60,6 +62,7 @@ function toSubagentRow(agent: Agent): SubagentRow {
     kind: "paseo",
     address: { serverId: agent.serverId, agentId: agent.id },
     id: agent.id,
+    parentAgentId: getParentAddressFromLabels(agent.labels, agent.serverId)?.agentId ?? null,
     provider: agent.provider,
     title: agent.title,
     description: null,

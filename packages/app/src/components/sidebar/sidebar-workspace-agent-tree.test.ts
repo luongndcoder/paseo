@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { SubagentRow } from "@/subagents/select";
 import {
-  buildRowSections,
-  compareSubagentRows,
+  buildSubagentForest,
   deriveSubagentRole,
+  getSlpRolePresentation,
   isRowActive,
   partitionSubagentRows,
 } from "./sidebar-workspace-agent-tree";
@@ -13,6 +13,7 @@ function paseoRow(overrides: Partial<Extract<SubagentRow, { kind: "paseo" }>> = 
     kind: "paseo",
     address: { serverId: "server-1", agentId: "agent-1" },
     id: "agent-1",
+    parentAgentId: null,
     provider: "claude",
     title: "Builder",
     description: null,
@@ -155,59 +156,75 @@ describe("deriveSubagentRole", () => {
   });
 });
 
-describe("buildRowSections", () => {
-  const row = (id: string, provider: string, at: number, running = false) =>
+describe("getSlpRolePresentation", () => {
+  it("gives every seat its own label, icon and color block", () => {
+    const roles = ["supervisor", "lead", "builder", "checker"] as const;
+    const presentations = roles.map(getSlpRolePresentation);
+    expect(presentations.map((presentation) => presentation.label)).toEqual([
+      "Supervisor",
+      "Lead",
+      "Builder",
+      "Checker",
+    ]);
+    // Colors must differ per seat, or the seats blur back together. Icons are stubbed to one
+    // component in tests, so only check each seat names a real icon here.
+    expect(presentations.every((presentation) => presentation.Icon)).toBe(true);
+    expect(new Set(presentations.map((presentation) => presentation.tone.text)).size).toBe(4);
+    for (const presentation of presentations) {
+      expect(presentation.tone.text).toMatch(/^#[0-9a-f]{6}$/);
+      expect(presentation.tone.border).toContain("rgba(");
+      expect(presentation.tone.bg).toContain("rgba(");
+    }
+  });
+});
+
+describe("buildSubagentForest", () => {
+  const lead = (id: string, at = 0) =>
     paseoRow({
       id,
       address: { serverId: "s", agentId: id },
+      provider: "slp-lead",
+      createdAt: new Date(at),
+    });
+  const build = (id: string, parent: string | null, provider = "slp-opencode-builder", at = 0) =>
+    paseoRow({
+      id,
+      address: { serverId: "s", agentId: id },
+      parentAgentId: parent,
       provider,
       createdAt: new Date(at),
-      ...(running
-        ? {
-            status: "running",
-            turn: { phase: "open", turnId: null, startedAt: null, cancellationRequestId: null },
-          }
-        : {}),
     });
 
-  it("orders seats Lead, then Builders, then Checkers, oldest first inside a seat", () => {
-    const rows = [
-      row("check-new", "slp-claude-checker", 3),
-      row("build-old", "slp-opencode-builder", 1),
-      row("lead", "slp-lead", 0, true),
-      row("build-new", "slp-opencode-builder", 2),
-      row("check-old", "slp-claude-checker", 0),
-      row("plain", "claude", 0),
-    ];
-    const sorted = [...rows].sort(compareSubagentRows);
-    expect(sorted.map((entry) => entry.id)).toEqual([
-      "lead",
-      "build-old",
-      "build-new",
-      "check-old",
-      "check-new",
-      "plain",
+  it("nests builders under their lead and keeps orphans on top", () => {
+    const forest = buildSubagentForest([
+      build("b1", "lead-1"),
+      lead("lead-1"),
+      build("orphan", "gone"),
+      build("b2", "lead-1"),
     ]);
-    const sections = buildRowSections(sorted);
-    expect(
-      sections.map((section) =>
-        section.kind === "header" ? `H:${section.label}` : `R:${section.row.id}`,
-      ),
-    ).toEqual([
-      "R:lead",
-      "H:Builders · 2",
-      "R:build-old",
-      "R:build-new",
-      "H:Checkers · 2",
-      "R:check-old",
-      "R:check-new",
-      "R:plain",
-    ]);
+    expect(forest.map((node) => node.row.id)).toEqual(["lead-1", "orphan"]);
+    expect(forest[0]?.children.map((child) => child.row.id)).toEqual(["b1", "b2"]);
   });
 
-  it("skips the header for a lone row", () => {
-    const sections = buildRowSections([row("only", "slp-lead", 0, true)]);
-    expect(sections).toHaveLength(1);
-    expect(sections[0]?.kind).toBe("row");
+  it("sorts siblings by seat, oldest first", () => {
+    const forest = buildSubagentForest([
+      build("check", "lead-1", "slp-claude-checker", 5),
+      build("build", "lead-1", "slp-opencode-builder", 9),
+      lead("lead-1"),
+    ]);
+    expect(forest[0]?.children.map((child) => child.row.id)).toEqual(["build", "check"]);
+  });
+
+  it("refuses to loop on cyclic parents", () => {
+    const forest = buildSubagentForest([build("a", "b"), build("b", "a")]);
+    const ids: string[] = [];
+    const walk = (nodes: typeof forest): void => {
+      for (const node of nodes) {
+        ids.push(node.row.id);
+        walk(node.children);
+      }
+    };
+    walk(forest);
+    expect(ids.sort()).toEqual(["a", "b"]);
   });
 });

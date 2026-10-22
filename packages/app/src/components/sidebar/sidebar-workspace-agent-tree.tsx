@@ -1,5 +1,15 @@
 import equal from "fast-deep-equal";
-import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, GitFork } from "lucide-react-native";
+import {
+  AlertCircle,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  ClipboardCheck,
+  Compass,
+  Crown,
+  GitFork,
+  Hammer,
+} from "lucide-react-native";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { Text, View, type GestureResponderEvent } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
@@ -25,6 +35,7 @@ import {
   findPaneById,
   useWorkspaceLayoutStore,
 } from "@/stores/workspace-layout-store";
+import { getParentAddressFromLabels } from "@getpaseo/protocol/agent-labels";
 import { isFinishedSubagent } from "@/subagents/archive-finished";
 import { isWorkspaceRootAgent } from "@/subagents/policies";
 import { refreshProviderSubagents, useProviderSubagentStore } from "@/subagents/provider-store";
@@ -457,6 +468,7 @@ export function useWorkspaceAgentSidebarSummary(
               kind: "paseo",
               address: { serverId, agentId: agent.id },
               id: agent.id,
+              parentAgentId: getParentAddressFromLabels(agent.labels, serverId)?.agentId ?? null,
               provider: agent.provider,
               title: agent.title,
               description: null,
@@ -947,6 +959,61 @@ export const SUBAGENT_ROLE_LABEL: Record<SubagentRole, string> = {
   checker: "Checker",
 };
 
+export interface SlpRolePresentation {
+  label: string;
+  Icon: typeof Crown;
+  tone: ProviderAccentTone;
+}
+
+/**
+ * One icon plus one color block per SLP seat, deliberately provider-independent: a Builder
+ * reads the same whether it runs on OpenCode or Claude, so the eye learns seat before vendor.
+ */
+export function getSlpRolePresentation(role: SubagentRole): SlpRolePresentation {
+  switch (role) {
+    case "supervisor":
+      return {
+        label: SUBAGENT_ROLE_LABEL.supervisor,
+        Icon: Crown,
+        tone: {
+          text: "#a78bfa",
+          border: "rgba(167, 139, 250, 0.45)",
+          bg: "rgba(167, 139, 250, 0.14)",
+        },
+      };
+    case "lead":
+      return {
+        label: SUBAGENT_ROLE_LABEL.lead,
+        Icon: Compass,
+        tone: {
+          text: "#60a5fa",
+          border: "rgba(96, 165, 250, 0.45)",
+          bg: "rgba(96, 165, 250, 0.14)",
+        },
+      };
+    case "builder":
+      return {
+        label: SUBAGENT_ROLE_LABEL.builder,
+        Icon: Hammer,
+        tone: {
+          text: "#34d399",
+          border: "rgba(52, 211, 153, 0.45)",
+          bg: "rgba(52, 211, 153, 0.14)",
+        },
+      };
+    case "checker":
+      return {
+        label: SUBAGENT_ROLE_LABEL.checker,
+        Icon: ClipboardCheck,
+        tone: {
+          text: "#fbbf24",
+          border: "rgba(251, 191, 36, 0.45)",
+          bg: "rgba(251, 191, 36, 0.14)",
+        },
+      };
+  }
+}
+
 const SUBAGENT_ROLE_RANK: Record<SubagentRole, number> = {
   supervisor: 0,
   lead: 1,
@@ -980,48 +1047,70 @@ export function compareSubagentRows(a: SubagentRow, b: SubagentRow): number {
   return subagentRoleRank(a) - subagentRoleRank(b) || a.createdAt.getTime() - b.createdAt.getTime();
 }
 
-export type SubagentRowSection =
-  | { kind: "header"; key: string; role: SubagentRole | null; label: string; count: number }
-  | { kind: "row"; key: string; row: SubagentRow };
+export interface SubagentTreeNode {
+  row: SubagentRow;
+  children: SubagentTreeNode[];
+}
 
-function sectionLabel(role: SubagentRole | null, count: number): string {
-  if (role === null) return `Others · ${count}`;
-  return `${SUBAGENT_ROLE_LABEL[role]}s · ${count}`;
+function rowKey(row: SubagentRow): string {
+  return `${row.kind}:${row.id}`;
+}
+
+function rowParentKey(row: SubagentRow): string | null {
+  // Both row kinds name a managed (paseo) agent as their parent.
+  if (!row.parentAgentId) return null;
+  return `paseo:${row.parentAgentId}`;
 }
 
 /**
- * Splits a visible row list into seat sections (Lead, then Builders, then Checkers, then the
- * rest), oldest first inside each seat. A section earns its header once it holds more than one
- * row; single rows read fine without one.
+ * Nests flat rows into a forest by parent linkage, so the tree reads Supervisor → Lead →
+ * Builder/Checker instead of one chronological list. Rows whose parent is not in the set
+ * (workspace roots, filtered-out agents, other hosts) stay top-level. Siblings keep seat
+ * order, oldest first. Cycles fall back to top level rather than recursing forever.
  */
-export function buildRowSections(rows: readonly SubagentRow[]): SubagentRowSection[] {
-  const groups = new Map<SubagentRole | null, SubagentRow[]>();
+export function buildSubagentForest(rows: readonly SubagentRow[]): SubagentTreeNode[] {
+  const byKey = new Map<string, SubagentRow>();
+  for (const row of rows) byKey.set(rowKey(row), row);
+  const childrenOf = new Map<string, SubagentRow[]>();
+  const roots: SubagentRow[] = [];
   for (const row of rows) {
-    const role = deriveSubagentRole(row);
-    const group = groups.get(role);
-    if (group) group.push(row);
-    else groups.set(role, [row]);
-  }
-  const orderedRoles = [...groups.keys()].sort(
-    (a, b) => (a === null ? 4 : SUBAGENT_ROLE_RANK[a]) - (b === null ? 4 : SUBAGENT_ROLE_RANK[b]),
-  );
-  const sections: SubagentRowSection[] = [];
-  for (const role of orderedRoles) {
-    const group = groups.get(role) ?? [];
-    if (group.length > 1) {
-      sections.push({
-        kind: "header",
-        key: `section-${role ?? "other"}`,
-        role,
-        label: sectionLabel(role, group.length),
-        count: group.length,
-      });
-    }
-    for (const row of group) {
-      sections.push({ kind: "row", key: `${row.kind}_${row.id}`, row });
+    const parentKey = rowParentKey(row);
+    if (parentKey && byKey.has(parentKey) && parentKey !== rowKey(row)) {
+      const siblings = childrenOf.get(parentKey);
+      if (siblings) siblings.push(row);
+      else childrenOf.set(parentKey, [row]);
+    } else {
+      roots.push(row);
     }
   }
-  return sections;
+  const build = (row: SubagentRow, ancestry: ReadonlySet<string>): SubagentTreeNode => {
+    const key = rowKey(row);
+    const next = new Set(ancestry);
+    next.add(key);
+    const children = (childrenOf.get(key) ?? [])
+      .filter((child) => !next.has(rowKey(child)))
+      .sort(compareSubagentRows)
+      .map((child) => build(child, next));
+    return { row, children };
+  };
+  const forest = roots.sort(compareSubagentRows).map((row) => build(row, new Set()));
+  // Pure parent cycles have no root and would vanish; surface them top-level instead.
+  const seen = new Set<string>();
+  const mark = (nodes: SubagentTreeNode[]): void => {
+    for (const node of nodes) {
+      seen.add(rowKey(node.row));
+      mark(node.children);
+    }
+  };
+  mark(forest);
+  for (const row of [...rows].sort(compareSubagentRows)) {
+    if (seen.has(rowKey(row))) continue;
+    const extra = build(row, new Set());
+    forest.push(extra);
+    mark([extra]);
+  }
+  forest.sort((a, b) => compareSubagentRows(a.row, b.row));
+  return forest;
 }
 
 /**
@@ -1226,8 +1315,8 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
       {totalArchivedCount > 0 ? (
         <WorkingOnlyToggle workingOnly={workingOnly} onToggle={handleToggleWorkingOnly} />
       ) : null}
-      {/* 1. Working / Active subagents on top, grouped by seat */}
-      <SubagentTreeRows
+      {/* 1. Working / Active subagents on top, nested Supervisor → Lead → Builders */}
+      <SubagentTreeForest
         rows={visibleActiveSubagents}
         workspace={workspace}
         parentProvider={parentProvider}
@@ -1270,8 +1359,8 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
         </PressHighlight>
       ) : null}
 
-      {/* 3. Archived / Completed subagents below, grouped by seat */}
-      <SubagentTreeRows
+      {/* 3. Archived / Completed subagents below, nested the same way */}
+      <SubagentTreeForest
         rows={shownArchivedSubagents}
         workspace={workspace}
         parentProvider={parentProvider}
@@ -1286,7 +1375,11 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
  * One flat row list rendered as seat sections (Lead, Builders, Checkers …), oldest first
  * inside a seat. Sections earn a header once they hold more than one row.
  */
-const SubagentTreeRows = memo(function SubagentTreeRows({
+/**
+ * One visible row list rendered as a nested Supervisor → Lead → Builder/Checker tree.
+ * Children indent under their parent so the chain of command reads at a glance.
+ */
+const SubagentTreeForest = memo(function SubagentTreeForest({
   rows,
   workspace,
   parentProvider,
@@ -1299,34 +1392,63 @@ const SubagentTreeRows = memo(function SubagentTreeRows({
   activeTargetKey: string | null;
   getProviderIcon: ReturnType<typeof useProviderIcons>;
 }) {
-  const sections = useMemo(() => buildRowSections(rows), [rows]);
+  const forest = useMemo(() => buildSubagentForest(rows), [rows]);
   return (
     <>
-      {sections.map((section) => {
-        if (section.kind === "header") {
-          return (
-            <View key={section.key} style={styles.treeSectionHeader}>
-              <Text style={styles.treeSectionLabel} numberOfLines={1}>
-                {section.label}
-              </Text>
-            </View>
-          );
-        }
-        const { row } = section;
-        const rowTargetKey =
-          row.kind === "paseo" ? `paseo:${row.id}` : `provider:${row.parentAgentId}:${row.id}`;
-        return (
-          <SidebarSubagentTreeItem
-            key={section.key}
-            workspace={workspace}
-            row={row}
-            parentProvider={parentProvider}
-            isSelected={activeTargetKey === rowTargetKey}
-            getProviderIcon={getProviderIcon}
-          />
-        );
-      })}
+      {forest.map((node) => (
+        <SubagentTreeNodeView
+          key={`${node.row.kind}_${node.row.id}`}
+          node={node}
+          workspace={workspace}
+          parentProvider={parentProvider}
+          activeTargetKey={activeTargetKey}
+          getProviderIcon={getProviderIcon}
+        />
+      ))}
     </>
+  );
+});
+
+const SubagentTreeNodeView = memo(function SubagentTreeNodeView({
+  node,
+  workspace,
+  parentProvider,
+  activeTargetKey,
+  getProviderIcon,
+}: {
+  node: SubagentTreeNode;
+  workspace: SidebarWorkspaceEntry;
+  parentProvider: string | null;
+  activeTargetKey: string | null;
+  getProviderIcon: ReturnType<typeof useProviderIcons>;
+}) {
+  const { row } = node;
+  const rowTargetKey =
+    row.kind === "paseo" ? `paseo:${row.id}` : `provider:${row.parentAgentId}:${row.id}`;
+  return (
+    <View>
+      <SidebarSubagentTreeItem
+        workspace={workspace}
+        row={row}
+        parentProvider={parentProvider}
+        isSelected={activeTargetKey === rowTargetKey}
+        getProviderIcon={getProviderIcon}
+      />
+      {node.children.length > 0 ? (
+        <View style={styles.treeChildrenIndent}>
+          {node.children.map((child) => (
+            <SubagentTreeNodeView
+              key={`${child.row.kind}_${child.row.id}`}
+              node={child}
+              workspace={workspace}
+              parentProvider={parentProvider}
+              activeTargetKey={activeTargetKey}
+              getProviderIcon={getProviderIcon}
+            />
+          ))}
+        </View>
+      ) : null}
+    </View>
   );
 });
 
@@ -1376,15 +1498,24 @@ const SidebarSubagentTreeItem = memo(function SidebarSubagentTreeItem({
   const [isHovered, setIsHovered] = useState(false);
 
   const presentation = useMemo(() => buildSubagentRowPresentationData(row), [row]);
+  const slpRole = useMemo(() => deriveSubagentRole(row), [row]);
+  const rolePresentation = useMemo(
+    () => (slpRole ? getSlpRolePresentation(slpRole) : null),
+    [slpRole],
+  );
   const providerTone = getProviderAccentTone(row.provider);
+  // An SLP seat wears its own icon and color block; anything else keeps the provider's.
+  const badgeTone = rolePresentation?.tone ?? providerTone;
   const isSameProviderAsParent =
     Boolean(parentProvider) &&
     formatShortProviderName(row.provider) === formatShortProviderName(parentProvider);
   const ProviderIcon = !isSameProviderAsParent
     ? resolveBuiltinProviderIcon(row.provider, getProviderIcon)
     : null;
+  const BadgeIcon = rolePresentation?.Icon ?? ProviderIcon;
 
   const roleBadgeLabel = useMemo(() => {
+    if (rolePresentation) return rolePresentation.label;
     if (row.kind === "provider") {
       const rawType = row.title?.trim();
       if (rawType && rawType.length <= 18) {
@@ -1392,11 +1523,8 @@ const SidebarSubagentTreeItem = memo(function SidebarSubagentTreeItem({
       }
       return "Task";
     }
-    // SLP seats read as Lead / Builder / Checker instead of the long profile id.
-    const role = deriveSubagentRole(row);
-    if (role) return SUBAGENT_ROLE_LABEL[role];
     return formatShortProviderName(row.provider);
-  }, [row]);
+  }, [rolePresentation, row]);
 
   const primaryTaskLabel = useMemo(() => {
     if (row.kind === "provider") {
@@ -1508,18 +1636,19 @@ const SidebarSubagentTreeItem = memo(function SidebarSubagentTreeItem({
       {/* Live status indicator */}
       <View style={styles.subagentStatusSlot}>{statusIndicator}</View>
 
-      {/* Subagent role pill (only shows provider icon if different from parent workspace agent) */}
+      {/* Seat pill: SLP seats wear their own icon and color block, anything else keeps the
+          provider icon — shown only when it differs from the parent workspace agent. */}
       <View
         style={[
           styles.subagentRoleBadge,
           {
-            backgroundColor: providerTone.bg,
-            borderColor: providerTone.border,
+            backgroundColor: badgeTone.bg,
+            borderColor: badgeTone.border,
           },
         ]}
       >
-        {ProviderIcon ? <ProviderIcon size={10} color={providerTone.text} /> : null}
-        <Text style={[styles.subagentRoleText, { color: providerTone.text }]} numberOfLines={1}>
+        {BadgeIcon ? <BadgeIcon size={10} color={badgeTone.text} /> : null}
+        <Text style={[styles.subagentRoleText, { color: badgeTone.text }]} numberOfLines={1}>
           {roleBadgeLabel}
         </Text>
       </View>
@@ -1676,6 +1805,12 @@ const styles = StyleSheet.create((theme) => ({
     marginLeft: 4,
     marginVertical: 1,
   },
+  treeChildrenIndent: {
+    marginLeft: 10,
+    paddingLeft: 4,
+    borderLeftWidth: 1,
+    borderLeftColor: theme.colors.border,
+  },
   treeToggleMoreRowHovered: {
     backgroundColor: theme.colors.surface1,
   },
@@ -1684,22 +1819,6 @@ const styles = StyleSheet.create((theme) => ({
     lineHeight: 13,
     fontFamily: theme.fontFamily.ui,
     color: theme.colors.foregroundMuted,
-  },
-  treeSectionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 4,
-    marginLeft: 4,
-    marginTop: 5,
-  },
-  treeSectionLabel: {
-    fontSize: 9,
-    lineHeight: 12,
-    fontFamily: theme.fontFamily.ui,
-    fontWeight: "700",
-    letterSpacing: 0.4,
-    textTransform: "uppercase",
-    color: theme.colors.foregroundExtraMuted,
   },
   treeItemRow: {
     flexDirection: "row",
