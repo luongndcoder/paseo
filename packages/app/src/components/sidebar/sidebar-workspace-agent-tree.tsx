@@ -914,16 +914,22 @@ export const WorkspaceAgentMetaRow = memo(function WorkspaceAgentMetaRow({
 const ARCHIVED_SUBAGENTS_LIMIT = 5;
 
 /**
- * Whether the row is still working. The badge and the row's icon already treat an agent the
- * daemon left in "running" without an open turn as done, so the tree must not keep it in the
- * working group: that is how a workspace ends up with a column of long-finished agents on top.
+ * Whether the row is still working. The badge and the row's icon read the agent's effective
+ * status, so the tree must read the same one: an agent the daemon closed, or one it left in
+ * "running" without an open turn, is done. Keeping those in the working group is how a busy
+ * workspace ends up with a column of long-finished agents on top of the one that is working.
  */
 export function isRowActive(row: SubagentRow): boolean {
   if (row.requiresAttention) {
     return true;
   }
-  if (row.kind === "paseo" && row.status === "running" && row.turn.phase !== "open") {
-    return false;
+  if (row.kind === "paseo") {
+    if (row.turn.phase === "open") {
+      return true;
+    }
+    if (row.status === "running" || row.status === "closed") {
+      return false;
+    }
   }
   return !isFinishedSubagent(row);
 }

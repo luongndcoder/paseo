@@ -49,4 +49,20 @@ describe("isRowActive", () => {
       ),
     ).toBe(false);
   });
+
+  it("moves a closed agent out of the working group", () => {
+    expect(
+      isRowActive(
+        paseoRow({ status: "closed", turn: { phase: "idle", cancellationRequestId: null } }),
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps an agent that is starting up in the working group", () => {
+    expect(
+      isRowActive(
+        paseoRow({ status: "initializing", turn: { phase: "idle", cancellationRequestId: null } }),
+      ),
+    ).toBe(true);
+  });
 });
