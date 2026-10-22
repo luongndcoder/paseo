@@ -1,8 +1,9 @@
 import equal from "fast-deep-equal";
 import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, GitFork } from "lucide-react-native";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
-import { Pressable, Text, View, type GestureResponderEvent } from "react-native";
+import { Text, View, type GestureResponderEvent } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
+import { PressHighlight } from "@/components/ui/press-highlight";
 import { create } from "zustand";
 import { useStoreWithEqualityFn } from "zustand/traditional";
 import { ClaudeIcon } from "@/components/icons/claude-icon";
@@ -299,6 +300,12 @@ export function useWorkspaceAgentSidebarSummary(
     : null;
   const resolvedWorkspaceKey = workspaceKey ?? `${serverId}:${workspaceId}`;
   const pendingArchiveIds = usePendingArchiveAgentIds(serverId);
+  // The subagent selector reads the pending archive by host-qualified key; the tree's own checks
+  // work on the plain agent id.
+  const pendingArchiveKeys = useMemo(
+    () => new Set([...pendingArchiveIds].map((id) => `${serverId}:${id}`)),
+    [pendingArchiveIds, serverId],
+  );
   const { preferences } = useFormPreferences();
 
   // Inspect open tabs in this workspace's layout for agent tabs or draft setup tabs
@@ -428,7 +435,7 @@ export function useWorkspaceAgentSidebarSummary(
           const rows = selectSubagentsForParent(
             state,
             { serverId, parentAgentId },
-            pendingArchiveIds,
+            pendingArchiveKeys,
             true,
           );
           for (const row of rows) {
@@ -463,7 +470,7 @@ export function useWorkspaceAgentSidebarSummary(
         }
         return collected;
       },
-      [pendingArchiveIds, rawWorkspaceAgents, rootAgentIds, serverId],
+      [pendingArchiveIds, pendingArchiveKeys, rawWorkspaceAgents, rootAgentIds, serverId],
     ),
     equal,
   );
@@ -866,7 +873,7 @@ export const WorkspaceAgentMetaRow = memo(function WorkspaceAgentMetaRow({
       ) : null}
 
       {hasSubagents ? (
-        <Pressable
+        <PressHighlight
           accessibilityRole="button"
           accessibilityLabel={subagentSummaryText}
           onPressIn={handleToggleSubagentsPressIn}
@@ -898,7 +905,7 @@ export const WorkspaceAgentMetaRow = memo(function WorkspaceAgentMetaRow({
           ) : (
             <ChevronDown size={10} color={subagentPillTone.text} />
           )}
-        </Pressable>
+        </PressHighlight>
       ) : null}
     </View>
   );
@@ -906,9 +913,17 @@ export const WorkspaceAgentMetaRow = memo(function WorkspaceAgentMetaRow({
 
 const ARCHIVED_SUBAGENTS_LIMIT = 5;
 
-function isRowActive(row: SubagentRow): boolean {
+/**
+ * Whether the row is still working. The badge and the row's icon already treat an agent the
+ * daemon left in "running" without an open turn as done, so the tree must not keep it in the
+ * working group: that is how a workspace ends up with a column of long-finished agents on top.
+ */
+export function isRowActive(row: SubagentRow): boolean {
   if (row.requiresAttention) {
     return true;
+  }
+  if (row.kind === "paseo" && row.status === "running" && row.turn.phase !== "open") {
+    return false;
   }
   return !isFinishedSubagent(row);
 }
@@ -1069,7 +1084,7 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
 
       {/* 2. Toggle button for older archived subagents */}
       {hiddenArchivedCount > 0 ? (
-        <Pressable
+        <PressHighlight
           accessibilityRole="button"
           accessibilityLabel={`Show ${hiddenArchivedCount} older archived subagents`}
           onPress={handleShowAllArchived}
@@ -1081,12 +1096,12 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
         >
           <ChevronRight size={10} color="#94a3b8" />
           <Text style={styles.treeToggleMoreText}>+{hiddenArchivedCount} older archived</Text>
-        </Pressable>
+        </PressHighlight>
       ) : null}
       {hiddenArchivedCount === 0 &&
       showAllArchived &&
       totalArchivedCount > ARCHIVED_SUBAGENTS_LIMIT ? (
-        <Pressable
+        <PressHighlight
           accessibilityRole="button"
           accessibilityLabel="Show fewer archived subagents"
           onPress={handleHideOlderArchived}
@@ -1098,7 +1113,7 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
         >
           <ChevronDown size={10} color="#94a3b8" />
           <Text style={styles.treeToggleMoreText}>Show less</Text>
-        </Pressable>
+        </PressHighlight>
       ) : null}
 
       {/* 3. Archived / Completed subagents below */}
@@ -1240,7 +1255,7 @@ const SidebarSubagentTreeItem = memo(function SidebarSubagentTreeItem({
   }, []);
 
   return (
-    <Pressable
+    <PressHighlight
       accessibilityRole="button"
       accessibilityLabel={`${roleBadgeLabel}: ${primaryTaskLabel}`}
       onPressIn={handlePressIn}
@@ -1306,7 +1321,7 @@ const SidebarSubagentTreeItem = memo(function SidebarSubagentTreeItem({
           {statusText}
         </Text>
       ) : null}
-    </Pressable>
+    </PressHighlight>
   );
 });
 
