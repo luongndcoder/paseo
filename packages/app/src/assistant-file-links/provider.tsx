@@ -25,6 +25,8 @@ export interface AssistantFileLinkResolverConfig {
   workspaceRoot?: string;
   // Text of the assistant message the links belong to; mentioned directories are fallback bases.
   messageText?: string;
+  /** Directory relative paths in the message are resolved against. */
+  relativePathBase?: string;
   onOpenWorkspaceFile?: (target: InlinePathTarget, disposition: OpenFileDisposition) => void;
   toast?: ToastApi | null;
 }
@@ -47,13 +49,22 @@ export function AssistantFileLinkResolverProvider({
   serverId,
   workspaceRoot,
   messageText,
+  relativePathBase,
   onOpenWorkspaceFile,
   toast,
   children,
 }: AssistantFileLinkResolverProviderProps) {
   const config = useMemo<AssistantFileLinkResolverConfig>(
-    () => ({ client, serverId, workspaceRoot, messageText, onOpenWorkspaceFile, toast }),
-    [client, serverId, workspaceRoot, messageText, onOpenWorkspaceFile, toast],
+    () => ({
+      client,
+      serverId,
+      workspaceRoot,
+      messageText,
+      relativePathBase,
+      onOpenWorkspaceFile,
+      toast,
+    }),
+    [client, serverId, workspaceRoot, messageText, relativePathBase, onOpenWorkspaceFile, toast],
   );
   // Render reads go through `config`; async handlers read the latest committed config via the ref.
   const configRef = useRef<AssistantFileLinkResolverConfig>(config);

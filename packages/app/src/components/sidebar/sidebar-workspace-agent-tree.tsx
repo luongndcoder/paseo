@@ -448,6 +448,7 @@ export function useWorkspaceAgentSidebarSummary(
             seenIds.add(agent.id);
             collected.push({
               kind: "paseo",
+              address: { serverId, agentId: agent.id },
               id: agent.id,
               provider: agent.provider,
               title: agent.title,
