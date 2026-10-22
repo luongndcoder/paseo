@@ -1961,7 +1961,6 @@ export const ptBR: TranslationResources = {
         alwaysUseExtension: "Sempre usar para .{{extension}}",
         alwaysUseFilename: "Sempre usar para {{filename}}",
         option: "{{title}} — {{owner}}",
-        actions: "Ações do arquivo",
         builtin: {
           owner: "Paseo",
           markdown: "Markdown",
@@ -1981,6 +1980,8 @@ export const ptBR: TranslationResources = {
       notFound: "Arquivo não encontrado",
       failedToLoadPreview: "Falha ao carregar prévia do arquivo",
       editor: {
+        preview: "Prévia",
+        source: "Fonte",
         fileSize: "Tamanho {{size}}",
         lines: "{{count}} linhas",
         editorStatus: "Status do editor: {{status}}",

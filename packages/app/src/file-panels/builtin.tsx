@@ -1,4 +1,4 @@
-import { useFileText, useFileUrl } from "@getpaseo/plugin/client";
+import { useFileUrl } from "@getpaseo/plugin/client";
 import { useCallback, useState } from "react";
 import { ScrollView, Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
@@ -9,23 +9,45 @@ import { FilePanelLoading } from "./loading";
 import { FileMarkdownPreview } from "./markdown-preview";
 import { plantUmlFileAsMarkdown } from "./plantuml";
 import type { BuiltinFilePanelProps } from "./panels";
-import { SourcePanel } from "./source/panel";
+import { TextFilePanel, type TextFilePreviewProps } from "./source/panel";
 import type { RenderingFilePanel, SourceFilePanel } from "./catalog";
 
-/** Shows Loading until the rendered Markdown has laid out once; later re-reads keep the content. */
-function MarkdownPanel({ file, target }: BuiltinFilePanelProps) {
-  const text = useFileText(file);
+/** Source: the text file panel with no Preview, for text files no other built-in panel claims. */
+function SourcePanel(props: BuiltinFilePanelProps) {
+  return <TextFilePanel {...props} />;
+}
+
+/** Markdown: the text file panel with the rendered document as its Preview. */
+function MarkdownPanel(props: BuiltinFilePanelProps) {
+  return <TextFilePanel {...props} preview={MarkdownPreview} />;
+}
+
+/** PlantUML: the text file panel with the diagram as its Preview. */
+function PlantUmlPanel(props: BuiltinFilePanelProps) {
+  return <TextFilePanel {...props} preview={PlantUmlPreview} />;
+}
+
+/** The diagram file previews as one ```plantuml fence, which the markdown preview renders. */
+function PlantUmlPreview({ text, target }: TextFilePreviewProps) {
+  return <MarkdownPreview text={plantUmlFileAsMarkdown(text)} target={target} />;
+}
+
+/** HTML: the text file panel with the sandboxed page as its Preview. */
+function HtmlPanel(props: BuiltinFilePanelProps) {
+  return <TextFilePanel {...props} preview={HtmlPreview} />;
+}
+
+/** Shows Loading until the rendered Markdown has laid out once; later edits keep the content. */
+function MarkdownPreview({ text, target }: TextFilePreviewProps) {
   const client = useSessionStore((state) => state.sessions[target.serverId]?.client ?? null);
   const [rendered, setRendered] = useState(false);
   const handleLayout = useCallback(() => setRendered(true), []);
-  if (text.status === "loading") return <FilePanelLoading />;
-  if (text.status === "error") return <FilePanelError message={text.error.message} />;
   return (
     <View style={styles.container}>
       <ScrollView style={styles.container} showsVerticalScrollIndicator>
         <View onLayout={handleLayout}>
           <FileMarkdownPreview
-            source={text.text}
+            source={text}
             filePath={target.path}
             workspaceRoot={target.workspaceRoot}
             client={client}
@@ -38,39 +60,11 @@ function MarkdownPanel({ file, target }: BuiltinFilePanelProps) {
   );
 }
 
-/** A diagram file previews as one ```plantuml fence, which the markdown preview renders. */
-function PlantUmlPanel({ file, target }: BuiltinFilePanelProps) {
-  const text = useFileText(file);
-  const client = useSessionStore((state) => state.sessions[target.serverId]?.client ?? null);
-  const [rendered, setRendered] = useState(false);
-  const handleLayout = useCallback(() => setRendered(true), []);
-  if (text.status === "loading") return <FilePanelLoading />;
-  if (text.status === "error") return <FilePanelError message={text.error.message} />;
+/** The page owns its scrolling, so there is no ScrollView around it. */
+function HtmlPreview({ text }: TextFilePreviewProps) {
   return (
     <View style={styles.container}>
-      <ScrollView style={styles.container} showsVerticalScrollIndicator>
-        <View onLayout={handleLayout}>
-          <FileMarkdownPreview
-            source={plantUmlFileAsMarkdown(text.text)}
-            filePath={target.path}
-            workspaceRoot={target.workspaceRoot}
-            client={client}
-            serverId={target.serverId}
-          />
-        </View>
-      </ScrollView>
-      {rendered ? null : <FilePanelLoading />}
-    </View>
-  );
-}
-
-function HtmlPanel({ file }: BuiltinFilePanelProps) {
-  const text = useFileText(file);
-  if (text.status === "loading") return <FilePanelLoading />;
-  if (text.status === "error") return <FilePanelError message={text.error.message} />;
-  return (
-    <View style={styles.container}>
-      <FileHtmlPreview html={text.text} testID="file-html-preview" />
+      <FileHtmlPreview html={text} testID="file-html-preview" />
     </View>
   );
 }

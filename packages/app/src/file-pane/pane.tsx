@@ -1,27 +1,20 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { PluginFile, PluginFileTab } from "@getpaseo/plugin/client";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
-import * as Clipboard from "expo-clipboard";
 import { Button } from "@/components/ui/button";
 import { useRetainedPanelActive } from "@/components/retained-panel";
-import { useToast } from "@/contexts/toast-context";
 import { useFileHandle, useFileHandleSnapshot } from "@/file-panels/file";
 import { FilePanelLoading } from "@/file-panels/loading";
 import { FilePanelPicker, FilePanelView, useFilePanelChoice, type FilePanel } from "@/file-panels";
 import { resolveFilePreviewReadTarget } from "@/file-explorer/preview-target";
-import { GitBlameModal } from "@/git/ndl-git/git-blame-modal";
-import { NdlGitModal } from "@/git/ndl-git/ndl-git-modal";
 import { useAppActivelyVisible } from "@/hooks/use-app-visible";
-import { useIsLocalExecution } from "@/hooks/use-is-local-daemon";
 import { usePublishPanelInstanceAttributes } from "@/panels/panel-instance-attributes";
 import { useSessionStore } from "@/stores/session-store";
 import { buildAbsoluteExplorerPath } from "@/utils/explorer-paths";
 import { formatFileSize } from "@/utils/format-file-size";
-import { openDesktopTarget, useDesktopOpenTargets } from "@/workspace/desktop-open-targets";
-import { resolveWorkspaceFilePaths, type WorkspaceFileLocation } from "@/workspace/file-open";
-import { FilePanelBar } from "./bar";
+import type { WorkspaceFileLocation } from "@/workspace/file-open";
 
 /**
  * The file tab: stats the file, picks its panel and mounts it. The panel reads, saves and shows
@@ -41,7 +34,6 @@ export function FilePane({
 }) {
   const { t } = useTranslation();
   const connected = useSessionStore((state) => Boolean(state.sessions[serverId]?.client));
-  const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
   const root = workspaceRoot.trim();
   const path = location.path.trim();
   const target = useMemo(
@@ -72,37 +64,6 @@ export function FilePane({
     lineNavigation: location.lineStart ? navigationRevision : null,
   });
   const [modified, setModified] = useState(false);
-  const barActions = useFilePaneBarActions({ serverId, workspaceRoot: root, path: path });
-  const [gitBlameOpen, setGitBlameOpen] = useState(false);
-  const [gitHistoryOpen, setGitHistoryOpen] = useState(false);
-  const [selectedBlameCommitSha, setSelectedBlameCommitSha] = useState<string | null>(null);
-  const relativeGitFilePath = useMemo(() => {
-    if (!target) return "";
-    const normalizedCwd = target.cwd.replace(/[\\/]+$/, "");
-    const normalizedPath = target.path.replace(/\\/g, "/");
-    if (normalizedCwd && normalizedPath.startsWith(`${normalizedCwd}/`)) {
-      return normalizedPath.slice(normalizedCwd.length + 1);
-    }
-    return normalizedPath.replace(/^\.\//, "");
-  }, [target]);
-  const canUseGitFileTools = Boolean(client && target);
-  const openGitBlame = useCallback(() => setGitBlameOpen(true), []);
-  const openGitHistory = useCallback(() => {
-    setSelectedBlameCommitSha(null);
-    setGitHistoryOpen(true);
-  }, []);
-  const closeGitBlame = useCallback(() => setGitBlameOpen(false), []);
-  const closeGitHistory = useCallback(() => setGitHistoryOpen(false), []);
-  const openFileHistory = useCallback(() => {
-    setGitBlameOpen(false);
-    setSelectedBlameCommitSha(null);
-    setGitHistoryOpen(true);
-  }, []);
-  const inspectCommit = useCallback((sha: string) => {
-    setGitBlameOpen(false);
-    setSelectedBlameCommitSha(sha);
-    setGitHistoryOpen(true);
-  }, []);
   usePublishPanelInstanceAttributes({ modified, suspendPendingSave: handle?.holdWrites });
   const panelLocation = useMemo(
     () => ({
@@ -116,27 +77,6 @@ export function FilePane({
     () => ({ serverId, workspaceRoot: root, path }),
     [path, root, serverId],
   );
-  const gitTools = target ? (
-    <>
-      <GitBlameModal
-        visible={gitBlameOpen}
-        onClose={closeGitBlame}
-        serverId={serverId}
-        cwd={target.cwd}
-        filePath={relativeGitFilePath}
-        onOpenFileHistory={openFileHistory}
-        onInspectCommit={inspectCommit}
-      />
-      <NdlGitModal
-        visible={gitHistoryOpen}
-        onClose={closeGitHistory}
-        serverId={serverId}
-        cwd={target.cwd}
-        initialFilePath={relativeGitFilePath}
-        initialCommitSha={selectedBlameCommitSha}
-      />
-    </>
-  ) : null;
 
   let body;
   if (!connected && target) {
@@ -169,15 +109,6 @@ export function FilePane({
     return (
       <View style={styles.container} testID="workspace-file-pane">
         <FilePanelPicker choice={choice} />
-        <FilePanelBar
-          choice={choice}
-          modified={modified}
-          onCopyPath={barActions.onCopyPath}
-          onRevealInFileManager={barActions.onRevealInFileManager}
-          revealTargetName={barActions.revealTargetName}
-          onShowGitBlame={canUseGitFileTools ? openGitBlame : undefined}
-          onShowGitHistory={canUseGitFileTools ? openGitHistory : undefined}
-        />
         <MountedFilePanel
           key={`${panel.id}:${targetKey}`}
           panel={panel}
@@ -186,7 +117,6 @@ export function FilePane({
           target={panelTarget}
           onModifiedChange={setModified}
         />
-        {gitTools}
       </View>
     );
   }
@@ -195,44 +125,6 @@ export function FilePane({
       <View style={styles.centerState}>{body}</View>
     </View>
   );
-}
-
-/** The file actions the bar offers: copy the file's path, reveal it in the file manager. */
-function useFilePaneBarActions(input: { serverId: string; workspaceRoot: string; path: string }) {
-  const { serverId, workspaceRoot, path } = input;
-  const { t } = useTranslation();
-  const toast = useToast();
-  const isLocalExecution = useIsLocalExecution(serverId);
-  const { targets: desktopOpenTargets } = useDesktopOpenTargets({ isLocalExecution });
-  const fileManagerTarget = desktopOpenTargets.find((target) => target.kind === "file-manager");
-  const resolvedFilePaths = useMemo(
-    () => (path ? resolveWorkspaceFilePaths({ path, workspaceRoot }) : null),
-    [path, workspaceRoot],
-  );
-  const handleCopyPath = useCallback(() => {
-    const targetPath = resolvedFilePaths?.absolutePath ?? path;
-    if (!targetPath) return;
-    void Clipboard.setStringAsync(targetPath);
-  }, [path, resolvedFilePaths]);
-  const handleRevealInFileManager = useCallback(() => {
-    if (!fileManagerTarget || !resolvedFilePaths) return;
-    void openDesktopTarget({
-      editorId: fileManagerTarget.id,
-      workspacePath: workspaceRoot || resolvedFilePaths.absolutePath,
-      filePath: resolvedFilePaths.absolutePath,
-    }).catch((cause) => {
-      toast.error(
-        cause instanceof Error ? cause.message : t("workspace.fileExplorer.errors.revealFailed"),
-      );
-    });
-  }, [fileManagerTarget, workspaceRoot, resolvedFilePaths, t, toast]);
-
-  return {
-    onCopyPath: resolvedFilePaths || path ? handleCopyPath : undefined,
-    onRevealInFileManager:
-      fileManagerTarget && resolvedFilePaths ? handleRevealInFileManager : undefined,
-    revealTargetName: fileManagerTarget?.label,
-  };
 }
 
 /** One panel mount. Its tab reports unsaved changes until the panel unmounts. */
