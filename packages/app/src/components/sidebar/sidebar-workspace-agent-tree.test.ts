@@ -6,7 +6,7 @@ import {
   getSlpRolePresentation,
   heuristicBaseProviderId,
   isRowActive,
-  partitionSubagentRows,
+  partitionSubagentForest,
   resolveCodingAgentInfo,
 } from "./sidebar-workspace-agent-tree";
 
@@ -76,7 +76,7 @@ describe("isRowActive", () => {
   });
 });
 
-describe("partitionSubagentRows", () => {
+describe("partitionSubagentForest", () => {
   const active = (id: string) =>
     paseoRow({
       id,
@@ -92,20 +92,43 @@ describe("partitionSubagentRows", () => {
       status: "idle",
       createdAt: new Date(at),
     });
+  const under = (parent: ReturnType<typeof paseoRow>, children: ReturnType<typeof done>[]) =>
+    children.map((child) => ({
+      ...child,
+      parentAgentId: parent.id,
+    }));
 
-  it("puts working rows on top and finished rows below, newest finished last", () => {
+  it("puts working subtrees on top and finished subtrees below", () => {
     const rows = [done("old", 1), active("work"), done("new", 2)];
-    const part = partitionSubagentRows(rows, { showAllArchived: false, activeTargetKey: null });
-    expect(part.visibleActiveSubagents.map((row) => row.id)).toEqual(["work"]);
-    expect(part.visibleArchivedSubagents.map((row) => row.id)).toEqual(["old", "new"]);
+    const part = partitionSubagentForest(rows, { showAllArchived: false, activeTargetKey: null });
+    expect(part.workingRoots.map((node) => node.row.id)).toEqual(["work"]);
+    expect(part.archivedRoots.map((node) => node.row.id)).toEqual(["old", "new"]);
     expect(part.hiddenArchivedCount).toBe(0);
     expect(part.totalArchivedCount).toBe(2);
   });
 
-  it("caps the finished group and counts the hidden older ones", () => {
+  it("keeps archived builders nested under their still-open lead", () => {
+    const lead = active("lead-1");
+    const rows = [lead, ...under(lead, [done("b1", 1), done("b2", 2)])];
+    const part = partitionSubagentForest(rows, { showAllArchived: false, activeTargetKey: null });
+    expect(part.workingRoots.map((node) => node.row.id)).toEqual(["lead-1"]);
+    expect(part.workingRoots[0]?.children.map((child) => child.row.id)).toEqual(["b1", "b2"]);
+    expect(part.archivedRoots).toEqual([]);
+  });
+
+  it("keeps a finished lead with a working builder in the working group", () => {
+    const lead = done("lead-1", 1);
+    const rows = [lead, ...under(lead, [done("b1", 2), active("b2")])];
+    const part = partitionSubagentForest(rows, { showAllArchived: false, activeTargetKey: null });
+    expect(part.workingRoots.map((node) => node.row.id)).toEqual(["lead-1"]);
+    expect(part.workingRoots[0]?.children.map((child) => child.row.id)).toEqual(["b1", "b2"]);
+    expect(part.archivedRoots).toEqual([]);
+  });
+
+  it("caps the finished group by subtree and counts the hidden older ones", () => {
     const rows = Array.from({ length: 8 }, (_, index) => done(`done-${index}`, index));
-    const part = partitionSubagentRows(rows, { showAllArchived: false, activeTargetKey: null });
-    expect(part.visibleArchivedSubagents.map((row) => row.id)).toEqual([
+    const part = partitionSubagentForest(rows, { showAllArchived: false, activeTargetKey: null });
+    expect(part.archivedRoots.map((node) => node.row.id)).toEqual([
       "done-3",
       "done-4",
       "done-5",
@@ -116,22 +139,38 @@ describe("partitionSubagentRows", () => {
     expect(part.totalArchivedCount).toBe(8);
   });
 
-  it("shows every finished row once the older ones are expanded", () => {
+  it("shows every finished subtree once the older ones are expanded", () => {
     const rows = Array.from({ length: 8 }, (_, index) => done(`done-${index}`, index));
-    const part = partitionSubagentRows(rows, { showAllArchived: true, activeTargetKey: null });
-    expect(part.visibleArchivedSubagents).toHaveLength(8);
+    const part = partitionSubagentForest(rows, { showAllArchived: true, activeTargetKey: null });
+    expect(part.archivedRoots).toHaveLength(8);
     expect(part.hiddenArchivedCount).toBe(0);
+  });
+
+  it("keeps the selected older subtree visible", () => {
+    const rows = Array.from({ length: 8 }, (_, index) => done(`done-${index}`, index));
+    const part = partitionSubagentForest(rows, {
+      showAllArchived: false,
+      activeTargetKey: "paseo:done-0",
+    });
+    expect(part.archivedRoots.map((node) => node.row.id)).toEqual([
+      "done-0",
+      "done-3",
+      "done-4",
+      "done-5",
+      "done-6",
+      "done-7",
+    ]);
   });
 
   it("hides every finished row when only working rows are wanted", () => {
     const rows = [active("work"), done("old", 1), done("new", 2)];
-    const part = partitionSubagentRows(rows, {
+    const part = partitionSubagentForest(rows, {
       showAllArchived: false,
       activeTargetKey: null,
       hideFinished: true,
     });
-    expect(part.visibleActiveSubagents.map((row) => row.id)).toEqual(["work"]);
-    expect(part.visibleArchivedSubagents).toEqual([]);
+    expect(part.workingRoots.map((node) => node.row.id)).toEqual(["work"]);
+    expect(part.archivedRoots).toEqual([]);
     expect(part.hiddenArchivedCount).toBe(0);
     // The total stays so the switch itself stays visible.
     expect(part.totalArchivedCount).toBe(2);

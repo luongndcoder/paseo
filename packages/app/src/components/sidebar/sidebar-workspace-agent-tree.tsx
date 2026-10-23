@@ -993,9 +993,11 @@ export interface PartitionSubagentRowsOptions {
   hideFinished?: boolean;
 }
 
-export interface PartitionedSubagentRows {
-  visibleActiveSubagents: SubagentRow[];
-  visibleArchivedSubagents: SubagentRow[];
+export interface PartitionedSubagentForest {
+  /** Subtrees with someone still working; archived children stay nested under their parent. */
+  workingRoots: SubagentTreeNode[];
+  /** Fully finished subtrees, newest roots kept with a toggle for the older ones. */
+  archivedRoots: SubagentTreeNode[];
   hiddenArchivedCount: number;
   totalArchivedCount: number;
 }
@@ -1163,72 +1165,88 @@ export function buildSubagentForest(rows: readonly SubagentRow[]): SubagentTreeN
   return forest;
 }
 
+function subagentRowTargetKey(row: SubagentRow): string {
+  return row.kind === "paseo" ? `paseo:${row.id}` : `provider:${row.parentAgentId}:${row.id}`;
+}
+
+function subtreeHasActive(node: SubagentTreeNode): boolean {
+  return isRowActive(node.row) || node.children.some(subtreeHasActive);
+}
+
+function subtreeHasTarget(node: SubagentTreeNode, targetKey: string): boolean {
+  return (
+    subagentRowTargetKey(node.row) === targetKey ||
+    node.children.some((child) => subtreeHasTarget(child, targetKey))
+  );
+}
+
 /**
- * Splits the rows into the working group on top and the finished group below, capping the
- * finished group at the newest entries with a toggle for the older ones. Pure so it is testable;
- * the tree reads it through a memo.
+ * Splits the forest into the working group on top and the fully finished group below, capping
+ * the finished group at the newest subtrees with a toggle for the older ones. The split happens
+ * per subtree, not per row: a lead that is still open keeps its archived builders nested under
+ * it, instead of them falling to the bottom as flat orphaned rows. Pure so it is testable; the
+ * tree reads it through a memo.
  */
-export function partitionSubagentRows(
+export function partitionSubagentForest(
   rows: readonly SubagentRow[],
   options: PartitionSubagentRowsOptions,
-): PartitionedSubagentRows {
+): PartitionedSubagentForest {
   const { showAllArchived, activeTargetKey, hideFinished = false } = options;
-  const active: SubagentRow[] = [];
-  const archived: SubagentRow[] = [];
-
-  for (const row of rows) {
-    if (isRowActive(row)) {
-      active.push(row);
-    } else {
-      archived.push(row);
-    }
-  }
-
-  // Seats read top-down (Supervisor, Lead, Builders, Checkers), oldest first inside a seat.
-  active.sort(compareSubagentRows);
-  archived.sort(compareSubagentRows);
 
   // "Working only" hides everything that is done, so a busy workspace shows only the agents
-  // that still need attention. The total stays so the switch itself stays visible.
+  // that still need attention. Row filtering keeps orphans top-level; no older toggle.
   if (hideFinished) {
+    const activeRows = rows.filter(isRowActive);
     return {
-      visibleActiveSubagents: active,
-      visibleArchivedSubagents: [],
+      workingRoots: buildSubagentForest(activeRows),
+      archivedRoots: [],
       hiddenArchivedCount: 0,
-      totalArchivedCount: archived.length,
+      totalArchivedCount: rows.length - activeRows.length,
     };
   }
 
-  if (archived.length <= ARCHIVED_SUBAGENTS_LIMIT || showAllArchived) {
+  const forest = buildSubagentForest(rows);
+  const workingRoots: SubagentTreeNode[] = [];
+  const archivedRoots: SubagentTreeNode[] = [];
+  for (const node of forest) {
+    (subtreeHasActive(node) ? workingRoots : archivedRoots).push(node);
+  }
+
+  if (archivedRoots.length <= ARCHIVED_SUBAGENTS_LIMIT || showAllArchived) {
     return {
-      visibleActiveSubagents: active,
-      visibleArchivedSubagents: archived,
+      workingRoots,
+      archivedRoots,
       hiddenArchivedCount: 0,
-      totalArchivedCount: archived.length,
+      totalArchivedCount: archivedRoots.length,
     };
   }
 
-  // Take the 5 newest archived (at the end of chronologically sorted list)
-  const newestArchived = archived.slice(-ARCHIVED_SUBAGENTS_LIMIT);
-  const hiddenCount = archived.length - ARCHIVED_SUBAGENTS_LIMIT;
+  // Keep the newest finished subtrees; older ones hide behind the toggle.
+  const ranked = archivedRoots
+    .map((node, index) => ({ node, index, createdAt: node.row.createdAt.getTime() }))
+    .sort((a, b) => b.createdAt - a.createdAt || a.index - b.index);
+  const kept = ranked.slice(0, ARCHIVED_SUBAGENTS_LIMIT);
+  const hiddenCount = archivedRoots.length - kept.length;
 
-  // Keep active selected row visible even if it's an older archived row
+  // The selected subtree stays visible even when it ranks among the older ones.
   if (activeTargetKey) {
-    const selectedArchived = archived.slice(0, -ARCHIVED_SUBAGENTS_LIMIT).find((r) => {
-      const key = r.kind === "paseo" ? `paseo:${r.id}` : `provider:${r.parentAgentId}:${r.id}`;
-      return key === activeTargetKey;
-    });
-    if (selectedArchived && !newestArchived.some((r) => r.id === selectedArchived.id)) {
-      newestArchived.unshift(selectedArchived);
-      newestArchived.sort(compareSubagentRows);
+    const selected = ranked
+      .slice(ARCHIVED_SUBAGENTS_LIMIT)
+      .find(({ node }) => subtreeHasTarget(node, activeTargetKey));
+    if (selected && !kept.some((entry) => entry.node === selected.node)) {
+      kept.push(selected);
     }
   }
 
+  const visibleArchived = kept
+    .map((entry) => entry.node)
+    .sort((a, b) => compareSubagentRows(a.row, b.row));
+
   return {
-    visibleActiveSubagents: active,
-    visibleArchivedSubagents: newestArchived,
+    workingRoots,
+    archivedRoots: visibleArchived,
     hiddenArchivedCount: hiddenCount,
-    totalArchivedCount: archived.length,
+    totalArchivedCount: archivedRoots.length,
   };
 }
 
@@ -1336,13 +1354,13 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
     toggleWorkingOnlySubagents(resolvedWorkspaceKey);
   }, [toggleWorkingOnlySubagents, resolvedWorkspaceKey]);
   const {
-    visibleActiveSubagents,
-    visibleArchivedSubagents: shownArchivedSubagents,
+    workingRoots,
+    archivedRoots: shownArchivedRoots,
     hiddenArchivedCount: shownHiddenArchivedCount,
     totalArchivedCount,
   } = useMemo(
     () =>
-      partitionSubagentRows(summary.subagents, {
+      partitionSubagentForest(summary.subagents, {
         showAllArchived,
         activeTargetKey,
         hideFinished: workingOnly,
@@ -1372,7 +1390,7 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
       ) : null}
       {/* 1. Working / Active subagents on top, nested Supervisor → Lead → Builders */}
       <SubagentTreeForest
-        rows={visibleActiveSubagents}
+        nodes={workingRoots}
         workspace={workspace}
         parentProvider={parentProvider}
         activeTargetKey={activeTargetKey}
@@ -1417,7 +1435,7 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
 
       {/* 3. Archived / Completed subagents below, nested the same way */}
       <SubagentTreeForest
-        rows={shownArchivedSubagents}
+        nodes={shownArchivedRoots}
         workspace={workspace}
         parentProvider={parentProvider}
         activeTargetKey={activeTargetKey}
@@ -1437,24 +1455,24 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
  * Children indent under their parent so the chain of command reads at a glance.
  */
 const SubagentTreeForest = memo(function SubagentTreeForest({
-  rows,
+  nodes,
   workspace,
   parentProvider,
   activeTargetKey,
   getProviderIcon,
   resolveCodingAgent,
 }: {
-  rows: readonly SubagentRow[];
+  /** Prebuilt subtree roots; the working/archived split already happened upstream. */
+  nodes: readonly SubagentTreeNode[];
   workspace: SidebarWorkspaceEntry;
   parentProvider: string | null;
   activeTargetKey: string | null;
   getProviderIcon: ReturnType<typeof useProviderIcons>;
   resolveCodingAgent: (provider: string) => CodingAgentInfo | null;
 }) {
-  const forest = useMemo(() => buildSubagentForest(rows), [rows]);
   return (
     <>
-      {forest.map((node) => (
+      {nodes.map((node) => (
         <SubagentTreeNodeView
           key={`${node.row.kind}_${node.row.id}`}
           node={node}
