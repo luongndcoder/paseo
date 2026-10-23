@@ -171,8 +171,7 @@ export function DiffFolderRow({
               <Pressable
                 accessibilityRole="checkbox"
                 accessibilityState={{
-                  checked:
-                    checkState === "indeterminate" ? "mixed" : checkState === "checked",
+                  checked: checkState === "indeterminate" ? "mixed" : checkState === "checked",
                 }}
                 onPress={(e) => {
                   e.stopPropagation?.();

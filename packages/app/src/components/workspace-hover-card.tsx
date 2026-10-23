@@ -192,9 +192,7 @@ function AgentProviderHoverRows({
             {summary.subagents.length === 1
               ? "1 subagent"
               : `${summary.subagents.length} subagents`}
-            {summary.runningSubagentCount > 0
-              ? ` (${summary.runningSubagentCount} running)`
-              : ""}
+            {summary.runningSubagentCount > 0 ? ` (${summary.runningSubagentCount} running)` : ""}
           </Text>
         </View>
       ) : null}

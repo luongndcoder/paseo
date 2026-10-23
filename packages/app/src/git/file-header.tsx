@@ -201,13 +201,7 @@ function FileHeaderMenu({
   );
 }
 
-function FileHeaderStagedBadge({
-  file,
-  testID,
-}: {
-  file: ParsedDiffFile;
-  testID?: string;
-}) {
+function FileHeaderStagedBadge({ file, testID }: { file: ParsedDiffFile; testID?: string }) {
   if (!file.staged) {
     return null;
   }

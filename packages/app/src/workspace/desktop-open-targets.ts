@@ -43,9 +43,7 @@ export function selectDesktopOpenTargets({
   }
   return (targets ?? []).filter(
     (target) =>
-      target.kind === "file-manager" ||
-      isFileManagerEditorId(target.id) ||
-      target.id === "vscode",
+      target.kind === "file-manager" || isFileManagerEditorId(target.id) || target.id === "vscode",
   );
 }
 

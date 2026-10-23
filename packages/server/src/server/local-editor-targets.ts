@@ -198,10 +198,7 @@ async function openFileManagerTarget(targetPath: string, reveal: boolean): Promi
     return;
   }
   if (process.platform === "win32") {
-    await spawnDetachedCommand(
-      "explorer.exe",
-      reveal ? [`/select,${targetPath}`] : [targetPath],
-    );
+    await spawnDetachedCommand("explorer.exe", reveal ? [`/select,${targetPath}`] : [targetPath]);
     return;
   }
   await spawnDetachedCommand("xdg-open", [reveal ? dirname(targetPath) : targetPath]);
@@ -264,7 +261,11 @@ export async function openInLocalDaemonEditorTarget(
     return;
   }
 
-  if (process.platform === "darwin" && spec.macAppName && resolveMacAppBundlePath(spec.macAppName)) {
+  if (
+    process.platform === "darwin" &&
+    spec.macAppName &&
+    resolveMacAppBundlePath(spec.macAppName)
+  ) {
     const openPaths =
       workspaceCwd && workspaceCwd !== targetPath ? [workspaceCwd, targetPath] : [targetPath];
     await spawnDetachedCommand("/usr/bin/open", ["-a", spec.macAppName, ...openPaths]);
