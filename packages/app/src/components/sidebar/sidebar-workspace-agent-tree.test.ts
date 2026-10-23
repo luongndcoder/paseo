@@ -4,8 +4,10 @@ import {
   buildSubagentForest,
   deriveSubagentRole,
   getSlpRolePresentation,
+  heuristicBaseProviderId,
   isRowActive,
   partitionSubagentRows,
+  resolveCodingAgentInfo,
 } from "./sidebar-workspace-agent-tree";
 
 function paseoRow(overrides: Partial<Extract<SubagentRow, { kind: "paseo" }>> = {}) {
@@ -226,5 +228,51 @@ describe("buildSubagentForest", () => {
     };
     walk(forest);
     expect(ids.sort()).toEqual(["a", "b"]);
+  });
+});
+
+describe("heuristicBaseProviderId", () => {
+  it("reads the base coding agent out of SLP seat ids that name it", () => {
+    expect(heuristicBaseProviderId("slp-opencode-builder")).toBe("opencode");
+    expect(heuristicBaseProviderId("slp-pi-builder")).toBe("pi");
+    expect(heuristicBaseProviderId("slp-claude-checker")).toBe("claude");
+    expect(heuristicBaseProviderId("claude")).toBe("claude");
+  });
+
+  it("returns null for ids that do not encode a base", () => {
+    expect(heuristicBaseProviderId("slp-lead")).toBeNull();
+    expect(heuristicBaseProviderId("slp-supervisor")).toBeNull();
+    expect(heuristicBaseProviderId("")).toBeNull();
+  });
+});
+
+describe("resolveCodingAgentInfo", () => {
+  it("prefers the daemon's derivedFromProviderId over the id heuristic", () => {
+    const info = resolveCodingAgentInfo("slp-lead", [
+      { provider: "slp-lead", derivedFromProviderId: "claude" },
+    ]);
+    expect(info?.id).toBe("claude");
+    expect(info?.label).toBe("Claude Code");
+    expect(info?.Icon).toBeDefined();
+  });
+
+  it("falls back to the provider id when the daemon does not report a base", () => {
+    const info = resolveCodingAgentInfo("slp-opencode-builder", [
+      { provider: "slp-opencode-builder", derivedFromProviderId: null },
+    ]);
+    expect(info?.id).toBe("opencode");
+  });
+
+  it("returns null when neither the daemon nor the id names a base", () => {
+    expect(resolveCodingAgentInfo("slp-lead", undefined)).toBeNull();
+    expect(resolveCodingAgentInfo("slp-lead", [{ provider: "slp-lead" }])).toBeNull();
+  });
+
+  it("skips the icon for a base the client does not know", () => {
+    const info = resolveCodingAgentInfo("slp-lead", [
+      { provider: "slp-lead", derivedFromProviderId: "exotic-runtime" },
+    ]);
+    expect(info?.id).toBe("exotic-runtime");
+    expect(info?.Icon).toBeUndefined();
   });
 });

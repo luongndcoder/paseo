@@ -28,6 +28,7 @@ import { StatusRing } from "@/components/status-ring";
 import { usePendingArchiveAgentIds } from "@/hooks/use-archive-agent";
 import { useFormPreferences } from "@/hooks/use-form-preferences";
 import type { SidebarWorkspaceEntry } from "@/hooks/use-sidebar-workspaces-list";
+import { useProvidersSnapshot } from "@/hooks/use-providers-snapshot";
 import { navigateToWorkspace } from "@/stores/navigation-active-workspace-store";
 import { useSessionStore, type Agent } from "@/stores/session-store";
 import {
@@ -168,6 +169,53 @@ export function resolveBuiltinProviderIcon(
     return fallbackGetIcon(provider);
   }
   return ClaudeIcon;
+}
+
+/**
+ * The canonical builtin id a provider id hints at, used when the daemon has not reported
+ * `derivedFromProviderId` for the provider (old daemons). Returns null when nothing matches,
+ * so callers hide the coding-agent chip instead of guessing.
+ */
+export function heuristicBaseProviderId(provider: string | null | undefined): string | null {
+  const normalized = (provider ?? "").trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized.includes("claude") || normalized.includes("anthropic")) return "claude";
+  if (normalized.includes("codex") || normalized.includes("openai")) return "codex";
+  if (normalized.includes("opencode")) return "opencode";
+  if (normalized.includes("copilot")) return "copilot";
+  if (normalized.includes("minimax")) return "minimax";
+  if (normalized.includes("antigravity")) return "antigravity";
+  if (normalized === "omp") return "omp";
+  // Token match, not substring: "copilot" contains "pi" and is handled above.
+  if (normalized.split(/[^a-z0-9]+/).includes("pi")) return "pi";
+  return null;
+}
+
+export interface CodingAgentInfo {
+  id: string;
+  label: string;
+  /** Absent when the base id is not a known builtin, so the row skips the icon. */
+  Icon?: ProviderIconComponent;
+}
+
+/**
+ * The coding agent (Claude Code, Codex, OpenCode, Pi…) a provider seat runs on. The daemon's
+ * `derivedFromProviderId` is authoritative — SLP seat ids like `slp-lead` do not encode their
+ * base — with the id heuristic as fallback for old daemons. null when even the heuristic
+ * finds nothing, so the row can hide the chip.
+ */
+export function resolveCodingAgentInfo(
+  provider: string,
+  entries: readonly { provider: string; derivedFromProviderId?: string | null }[] | undefined,
+): CodingAgentInfo | null {
+  const entry = entries?.find((candidate) => candidate.provider === provider);
+  const base = entry?.derivedFromProviderId ?? heuristicBaseProviderId(provider);
+  if (!base) return null;
+  return {
+    id: base,
+    label: formatProviderDisplayName(base),
+    Icon: heuristicBaseProviderId(base) ? resolveBuiltinProviderIcon(base) : undefined,
+  };
 }
 
 export function formatProviderDisplayName(provider: string | null | undefined): string {
@@ -477,6 +525,8 @@ export function useWorkspaceAgentSidebarSummary(
               turn: agent.turn,
               requiresAttention: agent.requiresAttention,
               createdAt: agent.createdAt,
+              model: agent.model ?? agent.runtimeInfo?.model ?? null,
+              workspaceId: agent.workspaceId,
             });
           }
         }
@@ -1222,6 +1272,11 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
     workspace.workspaceDirectory,
     resolvedWorkspaceKey,
   );
+  const { entries: providerEntries } = useProvidersSnapshot(workspace.serverId);
+  const resolveCodingAgent = useCallback(
+    (provider: string) => resolveCodingAgentInfo(provider, providerEntries),
+    [providerEntries],
+  );
   const explicitCollapsed = useSidebarSubagentTreeStore(
     (state) => state.collapsedByWorkspaceKey[resolvedWorkspaceKey],
   );
@@ -1322,6 +1377,7 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
         parentProvider={parentProvider}
         activeTargetKey={activeTargetKey}
         getProviderIcon={getProviderIcon}
+        resolveCodingAgent={resolveCodingAgent}
       />
 
       {/* 2. Toggle button for older archived subagents */}
@@ -1366,6 +1422,7 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
         parentProvider={parentProvider}
         activeTargetKey={activeTargetKey}
         getProviderIcon={getProviderIcon}
+        resolveCodingAgent={resolveCodingAgent}
       />
     </View>
   );
@@ -1385,12 +1442,14 @@ const SubagentTreeForest = memo(function SubagentTreeForest({
   parentProvider,
   activeTargetKey,
   getProviderIcon,
+  resolveCodingAgent,
 }: {
   rows: readonly SubagentRow[];
   workspace: SidebarWorkspaceEntry;
   parentProvider: string | null;
   activeTargetKey: string | null;
   getProviderIcon: ReturnType<typeof useProviderIcons>;
+  resolveCodingAgent: (provider: string) => CodingAgentInfo | null;
 }) {
   const forest = useMemo(() => buildSubagentForest(rows), [rows]);
   return (
@@ -1403,6 +1462,7 @@ const SubagentTreeForest = memo(function SubagentTreeForest({
           parentProvider={parentProvider}
           activeTargetKey={activeTargetKey}
           getProviderIcon={getProviderIcon}
+          resolveCodingAgent={resolveCodingAgent}
         />
       ))}
     </>
@@ -1415,12 +1475,14 @@ const SubagentTreeNodeView = memo(function SubagentTreeNodeView({
   parentProvider,
   activeTargetKey,
   getProviderIcon,
+  resolveCodingAgent,
 }: {
   node: SubagentTreeNode;
   workspace: SidebarWorkspaceEntry;
   parentProvider: string | null;
   activeTargetKey: string | null;
   getProviderIcon: ReturnType<typeof useProviderIcons>;
+  resolveCodingAgent: (provider: string) => CodingAgentInfo | null;
 }) {
   const { row } = node;
   const rowTargetKey =
@@ -1433,6 +1495,7 @@ const SubagentTreeNodeView = memo(function SubagentTreeNodeView({
         parentProvider={parentProvider}
         isSelected={activeTargetKey === rowTargetKey}
         getProviderIcon={getProviderIcon}
+        resolveCodingAgent={resolveCodingAgent}
       />
       {node.children.length > 0 ? (
         <View style={styles.treeChildrenIndent}>
@@ -1444,6 +1507,7 @@ const SubagentTreeNodeView = memo(function SubagentTreeNodeView({
               parentProvider={parentProvider}
               activeTargetKey={activeTargetKey}
               getProviderIcon={getProviderIcon}
+              resolveCodingAgent={resolveCodingAgent}
             />
           ))}
         </View>
@@ -1488,12 +1552,14 @@ const SidebarSubagentTreeItem = memo(function SidebarSubagentTreeItem({
   parentProvider,
   isSelected,
   getProviderIcon,
+  resolveCodingAgent,
 }: {
   workspace: SidebarWorkspaceEntry;
   row: SubagentRow;
   parentProvider: string | null;
   isSelected: boolean;
   getProviderIcon: ReturnType<typeof useProviderIcons>;
+  resolveCodingAgent: (provider: string) => CodingAgentInfo | null;
 }) {
   const [isHovered, setIsHovered] = useState(false);
 
@@ -1562,6 +1628,30 @@ const SidebarSubagentTreeItem = memo(function SidebarSubagentTreeItem({
     }
     return <CheckCircle2 size={9.5} color="#64748b" />;
   }, [presentation.statusBucket]);
+
+  // Per-seat meta: the model the agent runs, the coding agent its provider fronts, and the
+  // checkout branch it works on. Managed (paseo) rows carry all three; provider-owned
+  // subagent tasks expose none of them, so they stay a single line.
+  const codingAgent = useMemo(
+    () => (row.kind === "paseo" ? resolveCodingAgent(row.provider) : null),
+    [resolveCodingAgent, row],
+  );
+  const modelShort = useMemo(
+    () => (row.kind === "paseo" ? formatShortModelName(row.model) : null),
+    [row],
+  );
+  const rowBranch = useSessionStore(
+    useCallback(
+      (state) => {
+        if (row.kind !== "paseo") return null;
+        const session = state.sessions[workspace.serverId];
+        const ws = row.workspaceId ? session?.workspaces.get(row.workspaceId) : undefined;
+        return ws?.gitRuntime?.currentBranch ?? null;
+      },
+      [row, workspace.serverId],
+    ),
+  );
+  const branch = row.kind === "paseo" ? (rowBranch ?? workspace.currentBranch ?? null) : null;
 
   const handlePress = useCallback(
     (event: GestureResponderEvent) => {
@@ -1633,54 +1723,101 @@ const SidebarSubagentTreeItem = memo(function SidebarSubagentTreeItem({
       {/* Clean horizontal tree connector tick */}
       <View style={styles.treeBranchTick} />
 
-      {/* Live status indicator */}
-      <View style={styles.subagentStatusSlot}>{statusIndicator}</View>
+      <View style={styles.treeItemBody}>
+        <View style={styles.treeItemMainRow}>
+          {/* Live status indicator */}
+          <View style={styles.subagentStatusSlot}>{statusIndicator}</View>
 
-      {/* Seat pill: SLP seats wear their own icon and color block, anything else keeps the
-          provider icon — shown only when it differs from the parent workspace agent. */}
-      <View
-        style={[
-          styles.subagentRoleBadge,
-          {
-            backgroundColor: badgeTone.bg,
-            borderColor: badgeTone.border,
-          },
-        ]}
-      >
-        {BadgeIcon ? <BadgeIcon size={10} color={badgeTone.text} /> : null}
-        <Text style={[styles.subagentRoleText, { color: badgeTone.text }]} numberOfLines={1}>
-          {roleBadgeLabel}
-        </Text>
+          {/* Seat pill: SLP seats wear their own icon and color block, anything else keeps the
+              provider icon — shown only when it differs from the parent workspace agent. */}
+          <View
+            style={[
+              styles.subagentRoleBadge,
+              {
+                backgroundColor: badgeTone.bg,
+                borderColor: badgeTone.border,
+              },
+            ]}
+          >
+            {BadgeIcon ? <BadgeIcon size={10} color={badgeTone.text} /> : null}
+            <Text style={[styles.subagentRoleText, { color: badgeTone.text }]} numberOfLines={1}>
+              {roleBadgeLabel}
+            </Text>
+          </View>
+
+          {/* Subagent task title */}
+          <Text
+            style={[
+              styles.subagentTaskTitle,
+              (isHovered || isSelected) && styles.subagentTaskTitleActive,
+            ]}
+            numberOfLines={1}
+          >
+            {primaryTaskLabel}
+          </Text>
+
+          {/* Active status label on right (only when running / input / failed) */}
+          {statusText ? (
+            <Text
+              style={[
+                styles.subagentStatusLabel,
+                presentation.statusBucket === "running" && styles.subagentStatusRunning,
+                presentation.statusBucket === "needs_input" && styles.subagentStatusNeedsInput,
+                presentation.statusBucket === "failed" && styles.subagentStatusFailed,
+              ]}
+              numberOfLines={1}
+            >
+              {statusText}
+            </Text>
+          ) : null}
+        </View>
+
+        {/* Meta line: which model, which coding agent, which branch. SLP rows show all three;
+            anything without the data stays a single line. */}
+        <SubagentTreeItemMeta codingAgent={codingAgent} modelShort={modelShort} branch={branch} />
       </View>
-
-      {/* Subagent task title */}
-      <Text
-        style={[
-          styles.subagentTaskTitle,
-          (isHovered || isSelected) && styles.subagentTaskTitleActive,
-        ]}
-        numberOfLines={1}
-      >
-        {primaryTaskLabel}
-      </Text>
-
-      {/* Active status label on right (only when running / input / failed) */}
-      {statusText ? (
-        <Text
-          style={[
-            styles.subagentStatusLabel,
-            presentation.statusBucket === "running" && styles.subagentStatusRunning,
-            presentation.statusBucket === "needs_input" && styles.subagentStatusNeedsInput,
-            presentation.statusBucket === "failed" && styles.subagentStatusFailed,
-          ]}
-          numberOfLines={1}
-        >
-          {statusText}
-        </Text>
-      ) : null}
     </PressHighlight>
   );
 });
+
+/** The row's second line: coding agent, model, branch. Renders nothing when all are absent. */
+function SubagentTreeItemMeta({
+  codingAgent,
+  modelShort,
+  branch,
+}: {
+  codingAgent: CodingAgentInfo | null;
+  modelShort: string | null;
+  branch: string | null;
+}) {
+  if (!codingAgent && !modelShort && !branch) return null;
+  const codingAgentColor = codingAgent ? getProviderAccentTone(codingAgent.id).text : "#94a3b8";
+  return (
+    <View style={styles.treeItemMetaRow}>
+      {codingAgent ? (
+        <View style={styles.subagentMetaChip}>
+          {codingAgent.Icon ? <codingAgent.Icon size={9} color={codingAgentColor} /> : null}
+          <Text style={[styles.subagentMetaText, { color: codingAgentColor }]} numberOfLines={1}>
+            {codingAgent.label}
+          </Text>
+        </View>
+      ) : null}
+      {modelShort ? (
+        <Text style={styles.subagentMetaText} numberOfLines={1}>
+          {modelShort}
+        </Text>
+      ) : null}
+      {branch ? (
+        <View style={styles.subagentMetaChip}>
+          <GitFork size={9} color="#64748b" />
+          <Text style={styles.subagentMetaText} numberOfLines={1}>
+            {branch}
+          </Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
 
 const styles = StyleSheet.create((theme) => ({
   titleProviderBadgeGroup: {
@@ -1828,6 +1965,23 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: 4,
     borderRadius: 5,
   },
+  treeItemBody: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "column",
+    gap: 1,
+  },
+  treeItemMainRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  treeItemMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingLeft: 15,
+  },
   treeItemRowHovered: {
     backgroundColor: theme.colors.surface1,
   },
@@ -1846,6 +2000,20 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     justifyContent: "center",
     flexShrink: 0,
+  },
+  subagentMetaChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+    flexShrink: 0,
+    maxWidth: "45%",
+  },
+  subagentMetaText: {
+    fontSize: 9,
+    lineHeight: 11,
+    fontFamily: theme.fontFamily.mono,
+    color: theme.colors.foregroundMuted,
+    flexShrink: 1,
   },
   subagentRoleBadge: {
     flexDirection: "row",

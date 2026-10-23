@@ -328,7 +328,7 @@ describe("selectSubagentsForParent", () => {
     expect(rows.map((row) => row.id)).toEqual(["first", "second", "third"]);
   });
 
-  it("maps only row-rendered fields and does not expose onOpen", () => {
+  it("maps only row-rendered fields and does not expose onOpen or cwd", () => {
     const createdAt = new Date("2026-03-08T10:01:00.000Z");
     setAgents([
       makeAgent({ id: "parent" }),
@@ -340,7 +340,7 @@ describe("selectSubagentsForParent", () => {
         status: "running",
         requiresAttention: true,
         createdAt,
-        model: "should-not-leak",
+        model: "claude-opus-4-6",
         cwd: "/private/project",
       }),
     ]);
@@ -368,6 +368,8 @@ describe("selectSubagentsForParent", () => {
         turn: { phase: "idle", cancellationRequestId: null },
         requiresAttention: true,
         createdAt,
+        model: "claude-opus-4-6",
+        workspaceId: undefined,
       },
     ]);
     expect(Object.keys(rows[0] ?? {}).sort()).toEqual([
@@ -376,6 +378,7 @@ describe("selectSubagentsForParent", () => {
       "description",
       "id",
       "kind",
+      "model",
       "parentAgentId",
       "provider",
       "requiresAttention",
@@ -383,9 +386,9 @@ describe("selectSubagentsForParent", () => {
       "subtitle",
       "title",
       "turn",
+      "workspaceId",
     ]);
     expect(rows[0]).not.toHaveProperty("onOpen");
-    expect(rows[0]).not.toHaveProperty("model");
     expect(rows[0]).not.toHaveProperty("cwd");
   });
 

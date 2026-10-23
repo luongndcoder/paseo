@@ -137,6 +137,8 @@ export interface ProviderSnapshotEntry {
   description?: string;
   iconSvg?: string;
   defaultModeId?: string | null;
+  /** The registered provider this custom profile extends; null for built-ins. */
+  derivedFromProviderId?: string | null;
 }
 
 export interface AgentCreateConfigParent {

@@ -23,6 +23,10 @@ export interface PaseoSubagentRow {
   turn: Agent["turn"];
   requiresAttention: Agent["requiresAttention"];
   createdAt: Agent["createdAt"];
+  /** The agent's runtime model, as reported by its provider; absent when unknown. */
+  model?: string | null;
+  /** The workspace the agent runs in; undefined for legacy agents keyed by directory. */
+  workspaceId?: Agent["workspaceId"];
 }
 
 export interface ProviderSubagentRow {
@@ -71,6 +75,8 @@ function toSubagentRow(agent: Agent): SubagentRow {
     turn: agent.turn,
     requiresAttention: agent.requiresAttention,
     createdAt: agent.createdAt,
+    model: agent.model ?? agent.runtimeInfo?.model ?? null,
+    workspaceId: agent.workspaceId,
   };
 }
 

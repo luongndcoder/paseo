@@ -379,6 +379,10 @@ export const ProviderSnapshotEntrySchema = z.object({
   description: z.string().optional(),
   iconSvg: z.string().optional(),
   defaultModeId: z.string().nullable().optional(),
+  // COMPAT(derivedFromProviderId): added in v0.13.0-beta.2. The registered provider this custom
+  // profile extends (e.g. "claude" for an SLP seat profile); null for built-ins. Old daemons
+  // omit it, so consumers fall back to provider-id heuristics.
+  derivedFromProviderId: z.string().nullable().optional(),
 });
 
 export const CompactProviderSnapshotModelSchema = AgentModelDefinitionSchema.omit({
