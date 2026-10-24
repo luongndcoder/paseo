@@ -44,7 +44,7 @@ import { refreshProviderSubagents, useProviderSubagentStore } from "@/subagents/
 import { SlpHierarchyModal } from "./slp-hierarchy-modal";
 import {
   selectProviderSubagentsForParent,
-  selectSubagentsForParent,
+  toSubagentRow,
   type SubagentRow,
 } from "@/subagents/select";
 import { buildSubagentRowPresentationData } from "@/subagents/track-presentation";
@@ -361,12 +361,6 @@ export function useWorkspaceAgentSidebarSummary(
     : null;
   const resolvedWorkspaceKey = workspaceKey ?? `${serverId}:${workspaceId}`;
   const pendingArchiveIds = usePendingArchiveAgentIds(serverId);
-  // The subagent selector reads the pending archive by host-qualified key; the tree's own checks
-  // work on the plain agent id.
-  const pendingArchiveKeys = useMemo(
-    () => new Set([...pendingArchiveIds].map((id) => `${serverId}:${id}`)),
-    [pendingArchiveIds, serverId],
-  );
   const { preferences } = useFormPreferences();
 
   // Inspect open tabs in this workspace's layout for agent tabs or draft setup tabs
@@ -490,22 +484,34 @@ export function useWorkspaceAgentSidebarSummary(
     useCallback(
       (state) => {
         if (rootAgentIds.length === 0 && rawWorkspaceAgents.length === 0) return [];
+        const session = state.sessions[serverId];
+        if (!session) return [];
         const collected: SubagentRow[] = [];
         const seenIds = new Set<string>();
-        for (const parentAgentId of rootAgentIds) {
-          const rows = selectSubagentsForParent(
-            state,
-            { serverId, parentAgentId },
-            pendingArchiveKeys,
-            true,
-          );
-          for (const row of rows) {
-            if (!seenIds.has(row.id)) {
-              seenIds.add(row.id);
-              collected.push(row);
-            }
-          }
+        // Index every agent by its parent label once, then walk descendants breadth-first.
+        // One level was not enough: an SLP lead's builders and checkers are grandchildren of
+        // the workspace root, and without them the tree could never nest the real chain.
+        const byParent = new Map<string, Agent[]>();
+        const index = (agent: Agent) => {
+          const parent = getParentAddressFromLabels(agent.labels, serverId);
+          if (!parent || parent.serverId !== serverId) return;
+          const list = byParent.get(parent.agentId);
+          if (list) list.push(agent);
+          else byParent.set(parent.agentId, [agent]);
+        };
+        for (const agent of session.agents.values()) index(agent);
+        if (session.agentDetails) {
+          for (const agent of session.agentDetails.values()) index(agent);
         }
+        const visit = (parentId: string) => {
+          for (const agent of byParent.get(parentId) ?? []) {
+            if (seenIds.has(agent.id) || pendingArchiveIds.has(agent.id)) continue;
+            seenIds.add(agent.id);
+            collected.push(toSubagentRow(agent));
+            visit(agent.id);
+          }
+        };
+        for (const rootId of rootAgentIds) visit(rootId);
         // Also include any non-root agent in this workspace whose parent might live elsewhere
         const rootIdSet = new Set(rootAgentIds);
         for (const agent of rawWorkspaceAgents) {
@@ -514,27 +520,12 @@ export function useWorkspaceAgentSidebarSummary(
           }
           if (!rootIdSet.has(agent.id) && !seenIds.has(agent.id)) {
             seenIds.add(agent.id);
-            collected.push({
-              kind: "paseo",
-              address: { serverId, agentId: agent.id },
-              id: agent.id,
-              parentAgentId: getParentAddressFromLabels(agent.labels, serverId)?.agentId ?? null,
-              provider: agent.provider,
-              title: agent.title,
-              description: null,
-              subtitle: null,
-              status: agent.status,
-              turn: agent.turn,
-              requiresAttention: agent.requiresAttention,
-              createdAt: agent.createdAt,
-              model: agent.model ?? agent.runtimeInfo?.model ?? null,
-              workspaceId: agent.workspaceId,
-            });
+            collected.push(toSubagentRow(agent));
           }
         }
         return collected;
       },
-      [pendingArchiveIds, pendingArchiveKeys, rawWorkspaceAgents, rootAgentIds, serverId],
+      [pendingArchiveIds, rawWorkspaceAgents, rootAgentIds, serverId],
     ),
     equal,
   );

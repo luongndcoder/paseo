@@ -15,7 +15,6 @@ import {
   formatShortModelName,
   getProviderAccentTone,
   getSlpRolePresentation,
-  resolveBuiltinProviderIcon,
   resolveCodingAgentInfo,
   useWorkspaceAgentSidebarSummary,
   type CodingAgentInfo,
@@ -122,6 +121,11 @@ const SlpNodeCard = memo(function SlpNodeCard({
     [resolveCodingAgent, row],
   );
   const branch = useRowBranch(row, workspace.serverId, workspace.currentBranch ?? null);
+  // Provider-owned subagents have no SLP seat; their pill names the subagent TYPE
+  // ("m-doc-writer", "web-fetch"…), which is what actually tells them apart. The parent's
+  // provider id reads as noise.
+  const pillLabel =
+    seat?.label ?? (row.kind === "provider" ? row.title?.trim() || "Task" : row.provider);
   const title =
     row.kind === "paseo"
       ? row.title?.trim() || "Subagent"
@@ -129,13 +133,13 @@ const SlpNodeCard = memo(function SlpNodeCard({
 
   return (
     <View>
-      <View style={[styles.card, { borderLeftColor: tone.border }]}>
+      <View style={[styles.card, { borderLeftColor: tone.border, backgroundColor: tone.bg }]}>
         <View style={styles.cardMainRow}>
           <StatusDot bucket={presentation.statusBucket ?? "done"} />
-          <View style={[styles.seatPill, { backgroundColor: tone.bg, borderColor: tone.border }]}>
+          <View style={[styles.seatPill, { borderColor: tone.border }]}>
             {seat ? <seat.Icon size={11} color={tone.text} /> : null}
             <Text style={[styles.seatText, { color: tone.text }]} numberOfLines={1}>
-              {seat?.label ?? row.provider}
+              {pillLabel}
             </Text>
           </View>
           <Text style={styles.cardTitle} numberOfLines={2}>
@@ -161,10 +165,24 @@ const SlpNodeCard = memo(function SlpNodeCard({
   );
 });
 
+/** A level caption between sections, e.g. "LEADS · 6" or "PEERS · 24". */
+function LevelHeader({ label, count }: { label: string; count: number }) {
+  return (
+    <View style={styles.levelHeader}>
+      <Text style={styles.levelHeaderText}>
+        {label}
+        {count > 0 ? ` · ${count}` : ""}
+      </Text>
+      <View style={styles.levelHeaderRule} />
+    </View>
+  );
+}
+
 /**
- * Full-screen SLP hierarchy view for a workspace: the supervisor card on top, then every
- * subagent nested Supervisor → Lead → Builder/Checker with one card per agent showing the
- * model it runs, the coding agent its provider fronts, and its checkout branch.
+ * Full-screen SLP hierarchy view for a workspace: the supervisor card on top, then the leads
+ * with their builders and checkers nested beneath each of them, then the supervisor's own
+ * session tasks (provider subagents) as the peer crowd. Every card shows the model it runs,
+ * the coding agent its provider fronts, and its checkout branch.
  */
 export function SlpHierarchyModal({
   workspace,
@@ -191,8 +209,20 @@ export function SlpHierarchyModal({
   const forest = useMemo(() => buildSubagentForest(summary.subagents), [summary.subagents]);
   const supervisor = summary.primaryAgent;
   const supervisorCodingAgent = supervisor ? resolveCodingAgent(supervisor.provider) : null;
-  const supervisorTone = supervisor ? getProviderAccentTone(supervisor.provider) : null;
-  const SupervisorIcon = supervisor ? resolveBuiltinProviderIcon(supervisor.provider) : null;
+  // Roots split by row kind: managed agents are the leads' level; provider-owned subagents
+  // are the supervisor's own session tasks and read as the peer crowd below them.
+  const { leadRoots, peerRoots } = useMemo(() => {
+    const leads: SubagentTreeNode[] = [];
+    const peers: SubagentTreeNode[] = [];
+    for (const node of forest) {
+      (node.row.kind === "paseo" ? leads : peers).push(node);
+    }
+    return { leadRoots: leads, peerRoots: peers };
+  }, [forest]);
+  const peerCount = useMemo(
+    () => peerRoots.reduce((sum, node) => sum + countSubtree(node), 0),
+    [peerRoots],
+  );
 
   return (
     <Modal visible={visible} animationType="fade" onRequestClose={onClose}>
@@ -210,7 +240,6 @@ export function SlpHierarchyModal({
             <View style={[styles.card, styles.supervisorCard, { borderLeftColor: "#a78bfa" }]}>
               <View style={styles.cardMainRow}>
                 <StatusDot bucket={supervisor.statusBucket ?? "done"} />
-
                 <View style={[styles.seatPill, styles.supervisorPill]}>
                   <Text style={[styles.seatText, { color: "#a78bfa" }]}>Supervisor</Text>
                 </View>
@@ -223,17 +252,20 @@ export function SlpHierarchyModal({
                 codingAgent={supervisorCodingAgent}
                 branch={workspace.currentBranch ?? null}
               />
-              {SupervisorIcon && supervisorTone ? (
-                <View style={styles.supervisorProviderRow}>
-                  <SupervisorIcon size={12} color={supervisorTone.text} />
-                  <Text style={[styles.metaText, { color: supervisorTone.text }]}>
-                    {supervisor.providerLabel}
-                  </Text>
-                </View>
-              ) : null}
             </View>
           ) : null}
-          {forest.map((node) => (
+          {leadRoots.length > 0 ? <LevelHeader label="LEADS" count={leadRoots.length} /> : null}
+          {leadRoots.map((node) => (
+            <SlpNodeCard
+              key={`${node.row.kind}_${node.row.id}`}
+              node={node}
+              depth={0}
+              workspace={workspace}
+              resolveCodingAgent={resolveCodingAgent}
+            />
+          ))}
+          {peerRoots.length > 0 ? <LevelHeader label="PEERS" count={peerCount} /> : null}
+          {peerRoots.map((node) => (
             <SlpNodeCard
               key={`${node.row.kind}_${node.row.id}`}
               node={node}
@@ -249,6 +281,10 @@ export function SlpHierarchyModal({
       </View>
     </Modal>
   );
+}
+
+function countSubtree(node: SubagentTreeNode): number {
+  return 1 + node.children.reduce((sum, child) => sum + countSubtree(child), 0);
 }
 
 const styles = StyleSheet.create((theme) => ({
@@ -348,11 +384,23 @@ const styles = StyleSheet.create((theme) => ({
     gap: 8,
     marginTop: 8,
   },
-  supervisorProviderRow: {
+  levelHeader: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
-    paddingLeft: 21,
+    gap: 10,
+    marginTop: 6,
+  },
+  levelHeaderText: {
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 1.2,
+    fontFamily: theme.fontFamily.ui,
+    color: theme.colors.foregroundMuted,
+  },
+  levelHeaderRule: {
+    flex: 1,
+    height: 1,
+    backgroundColor: theme.colors.border,
   },
   spinnerWrap: {
     width: 13,

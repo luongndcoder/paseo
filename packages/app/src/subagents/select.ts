@@ -61,7 +61,7 @@ interface SelectSubagentsParams {
 const EMPTY_SUBAGENT_ROWS: SubagentRow[] = [];
 const EMPTY_PROVIDER_SUBAGENT_ROWS: ProviderSubagentRow[] = [];
 
-function toSubagentRow(agent: Agent): SubagentRow {
+export function toSubagentRow(agent: Agent): SubagentRow {
   return {
     kind: "paseo",
     address: { serverId: agent.serverId, agentId: agent.id },
