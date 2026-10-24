@@ -18,6 +18,18 @@ const OptionalSpeechProviderSchema = z
   .pipe(SpeechProviderIdSchema)
   .optional();
 
+const EXTERNAL_STT_COMMAND_ENV = "PASEO_DICTATION_EXTERNAL_STT_COMMAND";
+
+function resolveExternalDictationSttCommand(params: {
+  env: NodeJS.ProcessEnv;
+  persisted: PersistedConfig;
+}): string | undefined {
+  const fromEnv = params.env[EXTERNAL_STT_COMMAND_ENV]?.trim();
+  const fromConfig = params.persisted.features?.dictation?.stt?.external?.command?.trim();
+  const command = fromEnv || fromConfig;
+  return command ? command : undefined;
+}
+
 const OptionalBooleanFlagSchema = z
   .union([z.boolean(), z.string().trim().toLowerCase()])
   .optional()
@@ -175,6 +187,11 @@ export function resolveSpeechConfig(params: {
     persisted: params.persisted,
   });
 
+  const externalCommand = resolveExternalDictationSttCommand({
+    env: params.env,
+    persisted: params.persisted,
+  });
+
   return {
     openai,
     speech: {
@@ -182,6 +199,9 @@ export function resolveSpeechConfig(params: {
       sttLanguages: local.sttLanguages,
       ...(local.local ? { local: local.local } : {}),
       soniox,
+      ...(providers.dictationStt.provider === "external" && externalCommand
+        ? { external: { dictationSttCommand: externalCommand } }
+        : {}),
     },
   };
 }

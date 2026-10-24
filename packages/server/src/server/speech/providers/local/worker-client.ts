@@ -91,6 +91,23 @@ function resolveWorkerExecArgv(): string[] {
   ];
 }
 
+/**
+ * Forks a user-provided worker module (e.g. the standalone paseo-voice-vi package) speaking the
+ * same local-speech worker protocol. Only dictation STT is expected to ride on it.
+ */
+export function createExternalWorkerForker(command: string): () => LocalSpeechWorkerProcess {
+  return () => {
+    const env = { ...process.env };
+    applySherpaLoaderEnv(env);
+    return fork(command, [], {
+      env,
+      execArgv: resolveWorkerExecArgv(),
+      serialization: "advanced",
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
+    }) as LocalSpeechWorkerProcess;
+  };
+}
+
 function forkLocalSpeechWorker(): LocalSpeechWorkerProcess {
   const env = { ...process.env };
   applySherpaLoaderEnv(env);

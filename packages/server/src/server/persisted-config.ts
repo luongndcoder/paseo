@@ -109,7 +109,7 @@ const SpeechProviderIdSchema = z
   .string()
   .trim()
   .toLowerCase()
-  .pipe(z.enum(["openai", "local", "soniox"]));
+  .pipe(z.enum(["openai", "local", "soniox", "external"]));
 
 const FeatureDictationSchema = z
   .object({
@@ -120,6 +120,12 @@ const FeatureDictationSchema = z
         model: z.string().min(1).optional(),
         language: z.string().trim().min(1).optional(),
         confidenceThreshold: z.number().optional(),
+        external: z
+          .object({
+            command: z.string().trim().min(1),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

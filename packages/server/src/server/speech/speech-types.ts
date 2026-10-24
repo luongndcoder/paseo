@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const SpeechProviderIdSchema = z.enum(["openai", "local", "soniox"]);
+export const SpeechProviderIdSchema = z.enum(["openai", "local", "soniox", "external"]);
 export type SpeechProviderId = z.infer<typeof SpeechProviderIdSchema>;
 
 export const RequestedSpeechProviderSchema = z.object({

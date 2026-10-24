@@ -378,6 +378,21 @@ export type PaseoOpenAIConfig = OpenAiSpeechProviderConfig;
 export type PaseoLocalSpeechConfig = LocalSpeechProviderConfig;
 export type PaseoSonioxSpeechConfig = SonioxSpeechProviderConfig;
 
+/**
+ * The wire-side speech provider id set. "external" is config-file only and clamps to "local"
+ * for clients; see COMPAT(externalSpeechProvider).
+ */
+function toWireSpeechProviderId(
+  provider: "openai" | "local" | "soniox" | "external",
+): "openai" | "local" | "soniox" {
+  return provider === "external" ? "local" : provider;
+}
+
+export interface PaseoExternalSpeechConfig {
+  /** Path to the JS module the daemon forks for external dictation STT (paseo-voice-vi worker). */
+  dictationSttCommand: string;
+}
+
 export interface PaseoSpeechSttLanguages {
   dictation: string;
   voice: string;
@@ -388,6 +403,7 @@ export interface PaseoSpeechConfig {
   sttLanguages?: PaseoSpeechSttLanguages;
   local?: PaseoLocalSpeechConfig;
   soniox?: PaseoSonioxSpeechConfig;
+  external?: PaseoExternalSpeechConfig;
 }
 
 export type DaemonLifecycleIntent =
@@ -561,6 +577,24 @@ function createInitialRelayConfig(config: PaseoDaemonConfig): MutableDaemonConfi
   };
 }
 
+function createInitialSpeechConfig(config: PaseoDaemonConfig): MutableDaemonConfig["speech"] {
+  return {
+    // COMPAT(externalSpeechProvider): the wire enum only knows local/soniox/openai, and
+    // widening it would make older clients reject every config response. The external
+    // dictation worker reports as "local" on the wire; the real provider lives in
+    // features.dictation.stt.external.command in config.json.
+    dictationSttProvider: toWireSpeechProviderId(
+      config.speech?.providers.dictationStt.provider ?? "local",
+    ),
+    voiceSttProvider: toWireSpeechProviderId(config.speech?.providers.voiceStt.provider ?? "local"),
+    dictationLanguage: config.speech?.sttLanguages?.dictation ?? "vi",
+    voiceLanguage: config.speech?.sttLanguages?.voice ?? "vi",
+    sonioxApiKey: config.speech?.soniox?.apiKey ?? "",
+    sonioxModel: config.speech?.soniox?.model ?? DEFAULT_SONIOX_STT_MODEL,
+    sonioxLanguageHints: config.speech?.soniox?.languageHints ?? [...DEFAULT_SONIOX_LANGUAGE_HINTS],
+  };
+}
+
 function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDaemonConfig {
   const providers = config.providerOverrides ?? {};
 
@@ -589,17 +623,7 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
     pluginsEnabled: config.pluginsEnabled ?? false,
     plugins: config.plugins ?? {},
     skills: { selection: config.skillSelection },
-    speech: {
-      dictationSttProvider: config.speech?.providers.dictationStt.provider ?? "local",
-      voiceSttProvider: config.speech?.providers.voiceStt.provider ?? "local",
-      dictationLanguage: config.speech?.sttLanguages?.dictation ?? "vi",
-      voiceLanguage: config.speech?.sttLanguages?.voice ?? "vi",
-      sonioxApiKey: config.speech?.soniox?.apiKey ?? "",
-      sonioxModel: config.speech?.soniox?.model ?? DEFAULT_SONIOX_STT_MODEL,
-      sonioxLanguageHints: config.speech?.soniox?.languageHints ?? [
-        ...DEFAULT_SONIOX_LANGUAGE_HINTS,
-      ],
-    },
+    speech: createInitialSpeechConfig(config),
   };
 
   if (config.terminalProfiles !== undefined) {

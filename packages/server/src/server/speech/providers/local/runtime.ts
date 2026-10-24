@@ -15,12 +15,14 @@ import {
   type LocalSttModelId,
   type LocalTtsModelId,
 } from "./models.js";
+import type { LocalSpeechProviderConfig } from "./config.js";
 import { isNemotronModelInstalledSync } from "./sherpa/vietnamese-model.js";
 import {
   LocalSpeechWorkerClient,
   WorkerBackedSpeechToTextProvider,
   WorkerBackedTextToSpeechProvider,
   WorkerBackedTurnDetectionProvider,
+  createExternalWorkerForker,
 } from "./worker-client.js";
 
 interface ResolvedLocalModels {
@@ -223,6 +225,81 @@ function initializeLocalVoiceTts(params: {
   return new WorkerBackedTextToSpeechProvider(client);
 }
 
+function createExternalDictationSttProvider(params: {
+  providers: RequestedSpeechProviders;
+  speechConfig: PaseoSpeechConfig | null;
+  localConfig: LocalSpeechProviderConfig | null;
+  localModels: ResolvedLocalModels;
+  dictationLanguage: string;
+  logger: Logger;
+}): SpeechToTextProvider | null {
+  const { providers, speechConfig, localConfig, localModels, dictationLanguage, logger } = params;
+  if (providers.dictationStt.enabled === false || providers.dictationStt.provider !== "external") {
+    return null;
+  }
+  const command = speechConfig?.external?.dictationSttCommand?.trim();
+  if (!command) {
+    logger.warn(
+      "Dictation STT provider is 'external' but no external command is configured; set " +
+        "features.dictation.stt.external.command or PASEO_DICTATION_EXTERNAL_STT_COMMAND",
+    );
+    return null;
+  }
+  if (!localConfig) {
+    warnLocalConfigMissing(logger, "external dictation STT (models dir)");
+    return null;
+  }
+  const externalClient = new LocalSpeechWorkerClient({
+    logger,
+    config: {
+      modelsDir: localConfig.modelsDir,
+      voiceSttModel: localModels.voiceLocalSttModel,
+      dictationSttModel: localModels.dictationLocalSttModel,
+      dictationLanguage,
+      voiceTtsModel: localModels.voiceLocalTtsModel,
+      voiceTtsSpeakerId: speechConfig?.local?.models.voiceTtsSpeakerId,
+      voiceTtsSpeed: speechConfig?.local?.models.voiceTtsSpeed,
+    },
+    forkWorker: createExternalWorkerForker(command),
+  });
+  return initializeLocalDictationStt({ client: externalClient });
+}
+
+function createBuiltInWorkerProviders(params: {
+  localConfig: LocalSpeechProviderConfig | null;
+  localModels: ResolvedLocalModels;
+  dictationLanguage: string;
+  speechConfig: PaseoSpeechConfig | null;
+  logger: Logger;
+}): {
+  workerClient: LocalSpeechWorkerClient | null;
+  localVoiceSttProvider: SpeechToTextProvider | null;
+  localDictationSttProvider: SpeechToTextProvider | null;
+} {
+  const { localConfig, localModels, dictationLanguage, speechConfig, logger } = params;
+  const workerClient = localConfig
+    ? new LocalSpeechWorkerClient({
+        logger,
+        config: {
+          modelsDir: localConfig.modelsDir,
+          voiceSttModel: localModels.voiceLocalSttModel,
+          dictationSttModel: localModels.dictationLocalSttModel,
+          dictationLanguage,
+          voiceTtsModel: localModels.voiceLocalTtsModel,
+          voiceTtsSpeakerId: speechConfig?.local?.models.voiceTtsSpeakerId,
+          voiceTtsSpeed: speechConfig?.local?.models.voiceTtsSpeed,
+        },
+      })
+    : null;
+  return {
+    workerClient,
+    localVoiceSttProvider: workerClient ? initializeLocalVoiceStt({ client: workerClient }) : null,
+    localDictationSttProvider: workerClient
+      ? initializeLocalDictationStt({ client: workerClient })
+      : null,
+  };
+}
+
 export async function initializeLocalSpeechServices(params: {
   providers: RequestedSpeechProviders;
   speechConfig: PaseoSpeechConfig | null;
@@ -252,27 +329,26 @@ export async function initializeLocalSpeechServices(params: {
     modelsDir: localConfig?.modelsDir,
   });
 
-  const workerClient = localConfig
-    ? new LocalSpeechWorkerClient({
-        logger,
-        config: {
-          modelsDir: localConfig.modelsDir,
-          voiceSttModel: localModels.voiceLocalSttModel,
-          dictationSttModel: localModels.dictationLocalSttModel,
-          dictationLanguage,
-          voiceTtsModel: localModels.voiceLocalTtsModel,
-          voiceTtsSpeakerId: speechConfig?.local?.models.voiceTtsSpeakerId,
-          voiceTtsSpeed: speechConfig?.local?.models.voiceTtsSpeed,
-        },
-      })
-    : null;
+  const { workerClient, localVoiceSttProvider, localDictationSttProvider } =
+    createBuiltInWorkerProviders({
+      localConfig,
+      localModels,
+      dictationLanguage,
+      speechConfig,
+      logger,
+    });
 
-  const localVoiceSttProvider = workerClient
-    ? initializeLocalVoiceStt({ client: workerClient })
-    : null;
-  const localDictationSttProvider = workerClient
-    ? initializeLocalDictationStt({ client: workerClient })
-    : null;
+  // Dictation STT can ride on an external worker module (e.g. the standalone paseo-voice-vi
+  // package) while voice-mode features keep using the built-in worker. The external worker
+  // speaks the same protocol, so the only difference is what gets forked.
+  const externalDictationSttProvider = createExternalDictationSttProvider({
+    providers,
+    speechConfig,
+    localConfig,
+    localModels,
+    dictationLanguage,
+    logger,
+  });
 
   if (isLocalProviderEnabled(providers.voiceTurnDetection)) {
     if (workerClient) {
@@ -295,6 +371,10 @@ export async function initializeLocalSpeechServices(params: {
       dictationSttService = localDictationSttProvider;
     } else {
       warnLocalConfigMissing(logger, "dictation STT");
+    }
+  } else if (providers.dictationStt.provider === "external") {
+    if (externalDictationSttProvider) {
+      dictationSttService = externalDictationSttProvider;
     }
   }
 

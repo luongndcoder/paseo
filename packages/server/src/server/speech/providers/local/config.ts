@@ -84,7 +84,10 @@ function shouldIncludeLocalProviderConfig(params: {
   const localRequestedByFeature =
     (params.providers.dictationStt.enabled !== false &&
       (params.providers.dictationStt.provider === "local" ||
-        params.providers.dictationStt.provider === "soniox")) ||
+        params.providers.dictationStt.provider === "soniox" ||
+        // The external dictation worker shares the daemon's models dir, so it still needs
+        // the local models-dir resolution even though it brings its own engine.
+        params.providers.dictationStt.provider === "external")) ||
     (params.providers.voiceStt.enabled !== false &&
       (params.providers.voiceStt.provider === "local" ||
         params.providers.voiceStt.provider === "soniox")) ||
