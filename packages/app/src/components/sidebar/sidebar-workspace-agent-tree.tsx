@@ -9,6 +9,7 @@ import {
   Crown,
   GitFork,
   Hammer,
+  Network,
 } from "lucide-react-native";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { Text, View, type GestureResponderEvent } from "react-native";
@@ -40,6 +41,7 @@ import { getParentAddressFromLabels } from "@getpaseo/protocol/agent-labels";
 import { isFinishedSubagent } from "@/subagents/archive-finished";
 import { isWorkspaceRootAgent } from "@/subagents/policies";
 import { refreshProviderSubagents, useProviderSubagentStore } from "@/subagents/provider-store";
+import { SlpHierarchyModal } from "./slp-hierarchy-modal";
 import {
   selectProviderSubagentsForParent,
   selectSubagentsForParent,
@@ -1383,6 +1385,9 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
         onMouseDown: (e: { stopPropagation?: () => void }) => e.stopPropagation?.(),
       } as object)}
     >
+      {/* SLP hierarchy: opens the full-screen per-level view (Supervisor → Lead → Peer with
+          model, coding agent and branch per seat). */}
+      <HierarchyButton workspace={workspace} />
       {/* Working-only switch: hides everything that is done, so a busy workspace shows only
           the agents that still need attention. Offered once there is anything done to hide. */}
       {totalArchivedCount > 0 ? (
@@ -1454,6 +1459,32 @@ export const SidebarWorkspaceSubagentTree = memo(function SidebarWorkspaceSubage
  * One visible row list rendered as a nested Supervisor → Lead → Builder/Checker tree.
  * Children indent under their parent so the chain of command reads at a glance.
  */
+/** Sidebar entry to the full-screen SLP hierarchy view; owns its own open state. */
+function HierarchyButton({ workspace }: { workspace: SidebarWorkspaceEntry }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+  const open = useCallback(() => setIsOpen(true), []);
+  const close = useCallback(() => setIsOpen(false), []);
+  return (
+    <>
+      <PressHighlight
+        accessibilityRole="button"
+        accessibilityLabel="Open SLP hierarchy"
+        onPress={open}
+        style={[styles.hierarchyButtonRow, isHovered && styles.treeToggleMoreRowHovered]}
+        {...({
+          onMouseEnter: () => setIsHovered(true),
+          onMouseLeave: () => setIsHovered(false),
+        } as object)}
+      >
+        <Network size={10} color="#a78bfa" />
+        <Text style={styles.hierarchyButtonText}>SLP hierarchy</Text>
+      </PressHighlight>
+      {isOpen ? <SlpHierarchyModal workspace={workspace} visible onClose={close} /> : null}
+    </>
+  );
+}
+
 const SubagentTreeForest = memo(function SubagentTreeForest({
   nodes,
   workspace,
@@ -1968,6 +1999,21 @@ const styles = StyleSheet.create((theme) => ({
   },
   treeToggleMoreRowHovered: {
     backgroundColor: theme.colors.surface1,
+  },
+  hierarchyButtonRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingVertical: 3,
+    paddingHorizontal: 6,
+    borderRadius: 5,
+  },
+  hierarchyButtonText: {
+    fontSize: 10,
+    lineHeight: 13,
+    fontFamily: theme.fontFamily.ui,
+    fontWeight: "600",
+    color: "#a78bfa",
   },
   treeToggleMoreText: {
     fontSize: 9.5,
