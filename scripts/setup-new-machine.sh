@@ -7,6 +7,7 @@ WORKSPACE_DIR="${WORKSPACE_DIR:-$(dirname "$DEFAULT_PASEO_DIR")}"
 PASEO_DIR="${PASEO_DIR:-$DEFAULT_PASEO_DIR}"
 SLP_DIR="$WORKSPACE_DIR/paseo-slp"
 ZEROSUB_DIR="$WORKSPACE_DIR/zerosub"
+VOICE_VI_DIR="$WORKSPACE_DIR/paseo-voice-vi"
 PLANTUML_DIR="$WORKSPACE_DIR/paseo-plugin-plantuml"
 
 echo "==> [1/6] Cloning ecosystem repositories into $WORKSPACE_DIR ..."
@@ -26,6 +27,10 @@ fi
 
 if [ ! -d "$PLANTUML_DIR/.git" ]; then
   git clone https://github.com/luongndcoder/paseo-plugin-plantuml.git "$PLANTUML_DIR"
+fi
+
+if [ ! -d "$VOICE_VI_DIR" ]; then
+  git clone https://github.com/luongndcoder/paseo-voice-vi.git "$VOICE_VI_DIR"
 fi
 
 echo "==> [2/6] Installing & building Paseo monorepo + Web UI ..."
@@ -111,7 +116,9 @@ cat <<EOF > "$PLIST_PATH"
 		<key>PASEO_DICTATION_LANGUAGE</key>
 		<string>vi</string>
 		<key>PASEO_DICTATION_STT_PROVIDER</key>
-		<string>local</string>
+		<string>external</string>
+		<key>PASEO_DICTATION_EXTERNAL_STT_COMMAND</key>
+		<string>$VOICE_VI_DIR/bin/worker.mjs</string>
 		<key>PASEO_HOME</key>
 		<string>$HOME/.paseo</string>
 		<key>PASEO_LISTEN</key>
